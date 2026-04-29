@@ -36,9 +36,18 @@ static float get_modulation_factor_for_light_effect(
     uint32_t timestamp, LightEffectType effect, uint16_t period_msec, uint16_t phase_msec
 );
 
-void AC_DroneShowManager::get_color_of_rgb_light_at_seconds(float time, sb_rgb_color_t* color)
+sb_rgb_color_t AC_DroneShowManager::get_desired_color_of_rgb_light() {
+    float elapsed_time = get_elapsed_time_since_start_sec();
+    if (elapsed_time >= 0) {
+        return get_desired_color_of_rgb_light_at_seconds(elapsed_time);
+    } else {
+        return Colors::WHITE_DIM;
+    }
+}
+
+sb_rgb_color_t AC_DroneShowManager::get_desired_color_of_rgb_light_at_seconds(float time)
 {
-    *color = sb_light_player_get_color_at(_light_player, time < 0 || time > 86400000 ? 0 : time * 1000);
+    return sb_light_player_get_color_at(_light_player, time < 0 || time > 86400000 ? 0 : time * 1000);
 }
 
 uint32_t AC_DroneShowManager::_get_gps_synced_timestamp_in_millis_for_lights() const
@@ -333,6 +342,11 @@ void AC_DroneShowManager::_update_lights()
         // reviewed regularly to see if these are still applicable.
         color = Colors::RED;
         pattern = BLINK;
+    } else if (bubble_fence.is_breached() && bubble_fence.should_flash_leds()) {
+        // If the drone is outside the bubble fence, flash red, full brightness
+        light_signal_affected_by_brightness_setting = false;
+        color = Colors::RED;
+        pattern = FLASH_FOUR_TIMES_PER_SECOND;
     } else if (AP_Notify::flags.flying) {
         uint32_t mode = gcs().custom_mode();
 
@@ -359,12 +373,7 @@ void AC_DroneShowManager::_update_lights()
             } else if (_stage_in_drone_show_mode == DroneShow_Loiter) {
                 color = Colors::WHITE;
             } else {
-                elapsed_time = get_elapsed_time_since_start_sec();
-                if (elapsed_time >= 0) {
-                    get_color_of_rgb_light_at_seconds(elapsed_time, &color);
-                } else {
-                    color = Colors::WHITE_DIM;
-                }
+                color = get_desired_color_of_rgb_light();
             }
         } else {
             // Otherwise, show a bright white color so we can see the drone from the ground
@@ -385,7 +394,7 @@ void AC_DroneShowManager::_update_lights()
             // show has started already; otherwise blink green twice per second.
             elapsed_time = get_elapsed_time_since_start_sec();
             if (elapsed_time >= 0) {
-                get_color_of_rgb_light_at_seconds(elapsed_time, &color);
+                color = get_desired_color_of_rgb_light_at_seconds(elapsed_time);
                 light_signal_affected_by_brightness_setting = false;
             } else {
                 color = Colors::GREEN;
@@ -421,6 +430,8 @@ void AC_DroneShowManager::_update_lights()
             // Authorized, far from start --> slow pulsating green light
             // Authorized, about to start --> green flashes, twice per second,
             // synced to GPS
+            // Authorized, but no permission to start the motors --> show color
+            // according to light program
 
             if (_stage_in_drone_show_mode == DroneShow_Error) {
                 color = Colors::RED;
@@ -437,10 +448,14 @@ void AC_DroneShowManager::_update_lights()
                     // if there is plenty of time until takeoff, we pulse slowly
                     color = Colors::GREEN_DIM;
                     pulse = 0.5;
-                } else {
+                } else if (has_authorization_to_start_motors()) {
                     // if we are about to take off soon, flash quickly
                     color = Colors::GREEN;
                     pattern = FLASH_TWICE_PER_SECOND;
+                } else {
+                    // authorized for lights, but not authorized to start
+                    // motors. Show the color according to the light program
+                    color = get_desired_color_of_rgb_light();
                 }
             } else {
                 color = Colors::LIGHT_BLUE;
@@ -474,25 +489,33 @@ void AC_DroneShowManager::_update_lights()
 
     // Dim the lights if we are on the ground before the flight
     if (light_signal_affected_by_brightness_setting) {
-        uint8_t shift = 0;
+        if (brightness < 4) {
+            uint8_t shift;
 
-        if (brightness <= 0) {
-            // <= 0 = completely off, shift by 8 bits
-            shift = 8;
-        } else if (brightness == 1) {
-            // 1 = low brightness, keep the 6 MSB so the maximum is 64
-            shift = 2;
-        } else if (brightness == 2) {
-            // 2 = medium brightness, keep the 7 MSB so the maximum is 128
-            shift = 1;
+            if (brightness <= 0) {
+                // <= 0 = completely off, shift by 8 bits
+                shift = 8;
+            } else if (brightness == 1) {
+                // 1 = low brightness, keep the 6 MSB so the maximum is 64
+                shift = 2;
+            } else if (brightness == 2) {
+                // 2 = medium brightness, keep the 7 MSB so the maximum is 128
+                shift = 1;
+            } else {
+                // 3 = full brightness
+                shift = 0;
+            }
+
+            color.red >>= shift;
+            color.green >>= shift;
+            color.blue >>= shift;
         } else {
-            // >= 2 = full brightness
-            shift = 0;
+            // brightness is interpreted as a percentage
+            float brightness_scaler = brightness <= 100 ? brightness / 100.0f : 1.0f;
+            color.red = color.red * brightness_scaler;
+            color.green = color.green * brightness_scaler;
+            color.blue = color.blue * brightness_scaler;
         }
-
-        color.red >>= shift;
-        color.green >>= shift;
-        color.blue >>= shift;
     }
 
     _last_rgb_led_color = color;
@@ -555,6 +578,7 @@ void AC_DroneShowManager::_update_rgb_led_instance()
         int led_type = _params.led_specs[0].type;
         uint8_t channel = _params.led_specs[0].channel;
         uint8_t num_leds = _params.led_specs[0].count;
+        float min_brightness = _params.led_specs[0].min_brightness;
 
         if (
             led_type != previous_led_type ||
@@ -572,13 +596,16 @@ void AC_DroneShowManager::_update_rgb_led_instance()
 
             // Construct the new LED
             _rgb_led = _rgb_led_factory->new_rgb_led_by_type(
-                static_cast<DroneShowLEDType>(led_type), channel, num_leds
+                static_cast<DroneShowLEDType>(led_type), channel, num_leds, min_brightness
             );
 
             // Store the settings
             previous_led_type = led_type;
             previous_channel = channel;
             previous_num_leds = num_leds;
+        } else if (_rgb_led) {
+            // Update minimum brightness if LED exists
+            _rgb_led->set_min_brightness(min_brightness);
         }
     }
 

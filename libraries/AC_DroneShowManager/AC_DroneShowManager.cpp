@@ -1,6 +1,5 @@
 #include <GCS_MAVLink/GCS.h>
 
-#include <sys/stat.h>
 #include <sys/types.h>
 
 #include <AP_Filesystem/AP_Filesystem.h>
@@ -18,61 +17,8 @@
 
 #include <skybrush/skybrush.h>
 
+#include "DroneShow_Constants.h"
 #include "DroneShowLEDFactory.h"
-
-#ifndef HAL_BOARD_COLLMOT_DIRECTORY
-#  if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-#    define HAL_BOARD_COLLMOT_DIRECTORY "./collmot"
-#  else
-#    define HAL_BOARD_COLLMOT_DIRECTORY "/COLLMOT"
-#  endif
-#endif
-
-#define SHOW_FILE (HAL_BOARD_COLLMOT_DIRECTORY "/show.skyb")
-
-// Default update rate for position and velocity targets
-#define DEFAULT_UPDATE_RATE_HZ 10
-
-// Length of a GPS week in seconds
-#define GPS_WEEK_LENGTH_SEC 604800
-
-// Length of a GPS week in milliseconds
-#define GPS_WEEK_LENGTH_MSEC 604800000
-
-// Smallest valid value of show AMSL. Values smaller than this are considered unset.
-#define SMALLEST_VALID_AMSL -9999999
-
-// Largest valid value of show AMSL. Values larger than this are considered invalid.
-#define LARGEST_VALID_AMSL 10000000
-
-// Default altitude to take off to when starting the show, in meters. The drone
-// will take off to this altitude above its current position.
-#define DEFAULT_TAKEOFF_ALTITUDE_METERS 2.5f
-
-// Default time synchronization mode
-#define DEFAULT_SYNC_MODE TimeSyncMode_GPS
-
-// Default takeoff placement error tolerance level, in meters. The drone will not
-// take off if it is placed farther than this distance from its takeoff position.
-#define DEFAULT_XY_PLACEMENT_ERROR_METERS 3.0f
-
-// Default horizontal trajectory drift tolerance level, in meters.
-#define DEFAULT_MAX_XY_DRIFT_METERS 3.0f
-
-// Default vertical trajectory drift tolerance level, in meters.
-#define DEFAULT_MAX_Z_DRIFT_METERS 3.0f
-
-// Default action to take when the show trajectory ends
-#define DEFAULT_POST_ACTION PostAction_RTLOrLand
-
-// Distance threshold for the trajectory to be considered circular, in meters.
-#define DEFAULT_START_END_XY_DISTANCE_THRESHOLD_METERS 0.5f
-
-#if CONFIG_HAL_BOARD == HAL_BOARD_SITL
-// UDP port that the drone show manager uses to broadcast the status of the RGB light
-// when compiled with the SITL simulator. Uncomment if you need it.
-// #  define RGB_SOCKET_PORT 4245
-#endif
 
 extern const AP_HAL::HAL &hal;
 
@@ -166,7 +112,7 @@ const AP_Param::GroupInfo AC_DroneShowManager::var_info[] = {
     // @Param: LED0_TYPE
     // @DisplayName: Assignment of LED channel 0 to a LED output type
     // @Description: Specifies where the output of the main LED light track of the show should be sent
-    // @Values: 0:Off, 1:MAVLink, 2:NeoPixel, 3:ProfiLED, 4:Debug, 5:SITL, 6:Servo, 7:I2C RGB, 8:Inverted servo, 9:UART (WGDrones), 10:NeoPixel RGBW, 11:I2C RGBW, 12:Notification LED
+    // @Values: 0:Off, 1:MAVLink, 2:NeoPixel, 3:ProfiLED, 4:Debug, 5:SITL, 6:Servo, 7:I2C RGB, 8:Inverted servo, 9:UART (WGDrones), 10:NeoPixel RGBW, 11:I2C RGBW, 12:Notification LED, 13:Servo with limits (off=0), 14:Servo with limits
     // @User: Advanced
     AP_GROUPINFO("LED0_TYPE", 6, AC_DroneShowManager, _params.led_specs[0].type, 0),
 
@@ -198,6 +144,14 @@ const AP_Param::GroupInfo AC_DroneShowManager::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("LED0_WTEMP", 23, AC_DroneShowManager, _params.led_specs[0].white_temperature, 0.0f),
 
+    // @Param: LED0_MINBRI
+    // @DisplayName: Minimum LED brightness threshold
+    // @Description: Minimum brightness threshold (as a ratio 0.0-1.0) below which LED is turned off completely
+    // @Range: 0 1
+    // @Increment: 0.01
+    // @User: Advanced
+    AP_GROUPINFO("LED0_MINBRI", 32, AC_DroneShowManager, _params.led_specs[0].min_brightness, 0.0f),
+
     // @Param: MODE_BOOT
     // @DisplayName: Conditions for entering show mode
     // @Description: Bitfield that specifies when the drone should switch to show mode automatically
@@ -208,8 +162,8 @@ const AP_Param::GroupInfo AC_DroneShowManager::var_info[] = {
 
     // @Param: PRE_LIGHTS
     // @DisplayName: Brightness of preflight check related lights
-    // @Description: Controls the brightness of light signals on the drone that are used to report status information when the drone is on the ground
-    // @Range: 0 3
+    // @Description: Controls the brightness of light signals on the drone that are used to report status information when the drone is on the ground. 0 is off, 1 is low brightness (25%), 2 is medium brightness (50%), 3 is full brightness (100%). Values greater than 3 and less than or equal to 100 are interpreted as percentages. Negative values are treated as zero.
+    // @Range: 0 100
     // @Increment: 1
     // @User: Standard
     AP_GROUPINFO("PRE_LIGHTS", 10, AC_DroneShowManager, _params.preflight_light_signal_brightness, 2),
@@ -322,7 +276,45 @@ const AP_Param::GroupInfo AC_DroneShowManager::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("POST_ACTION", 26, AC_DroneShowManager, _params.post_action, DEFAULT_POST_ACTION),
 
-    // Currently used max parameter ID: 26; update this if you add more parameters.
+    // @Param: BFENCE_EN
+    // @DisplayName: Bubble fence enable/disable
+    // @Description: Allows you to enable (1) or disable (0) the bubble fence functionality
+    // @Values: 0:Disabled,1:Enabled
+    // @User: Standard
+    AP_GROUPINFO("BFENCE_EN", 27, AC_DroneShowManager, bubble_fence._params.enabled, 1),
+
+    // @Param: BFENCE_DXY
+    // @DisplayName: Bubble fence XY distance
+    // @Description: Maximum allowed deviation from the flight path in the XY plane. Set to zero to disable XY checks.
+    // @Units: m
+    // @Range: 0 1000
+    // @User: Standard
+    AP_GROUPINFO("BFENCE_DXY", 28, AC_DroneShowManager, bubble_fence._params.distance_xy, DEFAULT_BUBBLE_FENCE_MAX_XY_DRIFT_METERS),
+
+    // @Param: BFENCE_DZ
+    // @DisplayName: Bubble fence Z distance
+    // @Description: Maximum allowed deviation from the flight path along the Z axis. Set to zero to disable Z checks.
+    // @Units: m
+    // @Range: 0 1000
+    // @User: Standard
+    AP_GROUPINFO("BFENCE_DZ", 29, AC_DroneShowManager, bubble_fence._params.distance_z, DEFAULT_BUBBLE_FENCE_MAX_Z_DRIFT_METERS),
+
+    // @Param: BFENCE_TO
+    // @DisplayName: Bubble fence timeout
+    // @Description: Minimum time that the bubble fence needs to be breached to trigger the associated action
+    // @Units: sec
+    // @Range: 0 120
+    // @User: Standard
+    AP_GROUPINFO("BFENCE_TO", 30, AC_DroneShowManager, bubble_fence._params.timeout, 5),
+
+    // @Param: BFENCE_ACT
+    // @DisplayName: Bubble fence action
+    // @Description: Action to take when the bubble fence is breached beyond the timeout
+    // @Values: 0:None, 1:Report only, 2:Flash lights, 3:RTL, 4:Land, 5:Disarm
+    // @User: Standard
+    AP_GROUPINFO("BFENCE_ACT", 31, AC_DroneShowManager, bubble_fence._params.action, 1),
+
+    // Currently used max parameter ID: 32; update this if you add more parameters.
     // Note that the max parameter ID may appear in the middle of the above list.
 
     AP_GROUPEND
@@ -405,20 +397,7 @@ AC_DroneShowManager::~AC_DroneShowManager()
 
 void AC_DroneShowManager::early_init()
 {
-    // AP::FS().mkdir() apparently needs lots of free memory, see:
-    // https://github.com/ArduPilot/ardupilot/issues/16103
-    EXPECT_DELAY_MS(3000);
-
-    if (AP::FS().mkdir(HAL_BOARD_COLLMOT_DIRECTORY) < 0) {
-        if (errno == EEXIST) {
-            // Directory already exists, this is okay
-        } else {
-            hal.console->printf(
-                "Failed to create directory %s: %s (code %d)\n",
-                 HAL_BOARD_COLLMOT_DIRECTORY, strerror(errno), errno
-            );
-        }
-    }
+    _create_show_directory();
 }
 
 void AC_DroneShowManager::init(const AC_WPNav* wp_nav)
@@ -445,6 +424,10 @@ void AC_DroneShowManager::init(const AC_WPNav* wp_nav)
     _open_rgb_led_socket();
 #endif
     _update_rgb_led_instance();
+
+    // initialise safety features
+    hard_fence.init();
+    bubble_fence.init();
 }
 
 
@@ -493,6 +476,23 @@ bool AC_DroneShowManager::configure_show_coordinate_system(
     }
 
     return true;
+}
+
+AC_BubbleFence::FenceAction AC_DroneShowManager::get_bubble_fence_action()
+{
+    Vector3f dist;
+    AC_BubbleFence::FenceAction action;
+
+    // Check the distance from the desired position during the performance
+    // only, not in any of the other stages
+    if (get_stage_in_drone_show_mode() == DroneShow_Performing) {
+        get_distance_from_desired_position(dist);
+        action = bubble_fence.notify_distance_from_desired_position(dist);
+    } else {
+        action = AC_BubbleFence::FenceAction::NONE;
+    }
+
+    return action;
 }
 
 bool AC_DroneShowManager::get_current_guided_mode_command_to_send(
@@ -797,64 +797,6 @@ float AC_DroneShowManager::get_elapsed_time_since_start_sec() const
     return elapsed_usec == INT64_MIN ? -86400 : static_cast<float>(elapsed_usec / 1000) / 1000.0f;
 }
 
-PostAction AC_DroneShowManager::get_action_at_end_of_show() const
-{
-    switch (_params.post_action) {
-        case PostAction_Land:
-            return PostAction_Land;
-
-        case PostAction_Loiter:
-            return PostAction_Loiter;
-
-        case PostAction_RTL:
-            return PostAction_RTL;
-
-        case PostAction_RTLOrLand:
-            return (
-                _is_at_takeoff_position_xy(2 * DEFAULT_START_END_XY_DISTANCE_THRESHOLD_METERS) &&
-                _trajectory_is_circular
-            ) ? PostAction_RTL : PostAction_Land;
-
-        default:
-            // Legacy behaviour when we did not have a parameter for the
-            // post-show action
-            return PostAction_Land;
-    }
-}
-
-bool AC_DroneShowManager::get_global_takeoff_position(Location& loc) const
-{
-    // This function may be called any time, not only during the show, so we
-    // need to take the parameters provided by the user, convert them into a
-    // ShowCoordinateSystem object, and then use that to get the GPS coordinates
-    sb_vector3_with_yaw_t vec;
-
-    if (!_tentative_show_coordinate_system.is_valid())
-    {
-        return false;
-    }
-
-    vec.x = _takeoff_position_mm.x;
-    vec.y = _takeoff_position_mm.y;
-    vec.z = _takeoff_position_mm.z;
-
-    _tentative_show_coordinate_system.convert_show_to_global_coordinate(vec, loc);
-
-    return true;
-}
-
-float AC_DroneShowManager::get_motor_spool_up_time_sec() const {
-    float value = 0.0f;
-
-    if (AP_Param::get("MOT_SPOOL_TIME", value)) {
-        if (value >= 0.0f) {
-            return value;
-        }
-    }
-
-    return DEFAULT_MOTOR_SPOOL_UP_TIME_SEC;
-}
-
 int64_t AC_DroneShowManager::get_time_until_start_usec() const
 {
     return -get_elapsed_time_since_start_usec();
@@ -863,11 +805,6 @@ int64_t AC_DroneShowManager::get_time_until_start_usec() const
 float AC_DroneShowManager::get_time_until_start_sec() const
 {
     return -get_elapsed_time_since_start_sec();
-}
-
-float AC_DroneShowManager::get_time_until_takeoff_sec() const
-{
-    return get_time_until_start_sec() + get_relative_takeoff_time_sec();
 }
 
 float AC_DroneShowManager::get_time_until_landing_sec() const
@@ -981,16 +918,6 @@ bool AC_DroneShowManager::has_explicit_show_origin_set_by_user() const
     return _params.origin_lat != 0 && _params.origin_lng != 0;
 }
 
-bool AC_DroneShowManager::loaded_show_data_successfully() const
-{
-    return _trajectory_valid;
-}
-
-bool AC_DroneShowManager::loaded_yaw_control_data_successfully() const
-{
-    return _yaw_control_valid;
-}
-
 void AC_DroneShowManager::notify_drone_show_mode_initialized()
 {
     _cancel_requested = false;
@@ -1013,6 +940,11 @@ void AC_DroneShowManager::notify_drone_show_mode_entered_stage(DroneShowModeStag
     // Force-update preflight checks so we see the errors immediately if we
     // switched to the "waiting for start time" stage
     _update_preflight_check_result(/* force = */ true);
+
+    // Call callbacks for certain stages
+    if (_stage_in_drone_show_mode == DroneShow_Landed) {
+        _handle_switch_to_landed_state();
+    }
 }
 
 void AC_DroneShowManager::notify_drone_show_mode_exited()
@@ -1026,54 +958,6 @@ void AC_DroneShowManager::notify_drone_show_mode_exited()
 void AC_DroneShowManager::notify_guided_mode_command_sent(const GuidedModeCommand& command)
 {
     _last_setpoint = command;   
-}
-
-void AC_DroneShowManager::notify_landed()
-{
-    _cancel_requested = false;
-
-    // Let's not clear the start time; there's not really much point but at
-    // least we don't confuse the GCS (not Skybrush but Mission Planner) with
-    // a parameter suddenly changing behind its back. This is just a theoretical
-    // possibility but let us be on the safe side.
-    // _clear_start_time_after_landing();
-}
-
-bool AC_DroneShowManager::notify_takeoff_attempt()
-{
-    if (!is_prepared_to_take_off())
-    {
-        return false;
-    }
-    
-    return _copy_show_coordinate_system_from_parameters_to(_show_coordinate_system);
-}
-
-bool AC_DroneShowManager::reload_or_clear_show(bool do_clear)
-{
-    // Don't reload or clear the show if the motors are armed
-    if (AP::motors()->armed()) {
-        return false;
-    }
-
-    if (do_clear) {
-        if (AP::FS().unlink(SHOW_FILE)) {
-            // Error while removing the file; did it exist?
-            if (errno == ENOENT) {
-                // File was missing already, this is OK.
-            } else {
-                // This is a genuine failure
-                return false;
-            }
-        }
-    }
-
-    return _load_show_file_from_storage();
-}
-
-bool AC_DroneShowManager::reload_show_from_storage()
-{
-    return reload_or_clear_show(/* do_clear = */ false);
 }
 
 void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) const
@@ -1109,8 +993,9 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
         flags |= (1 << 3);
     }
     if (has_authorization()) {
-        // TODO(ntamas): we will eventually need to send the entire
-        // authorization type somewhere
+        // This is superseded by the full authorization scope but we need to
+        // keep on sending this for backward compatibility with older GCS
+        // versions
         flags |= (1 << 2);
     }
     if (uses_gps_time_for_show_start() && !_is_gps_time_ok()) {
@@ -1136,10 +1021,14 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
     gps_health |= (gps.num_sats() > 31 ? 31 : gps.num_sats()) << 3;
 
     /* calculate third byte of status flags.
-     * Currently we use bits 0 and 1 for encoding the boot count modulo 4,
-     * and bit 7 to indicate that the drone has deviated from its expected
-     * position. */
+     *
+     * Bits 0 and 1: boot count modulo 4
+     * Bits 2 and 3: authorization scope
+     * Bits 4-6: reserved, set to zero
+     * Bit 7: indicate that the drone has deviated from its expected position.
+     */
     flags3 = _boot_count & 0x03;
+    flags3 |= (static_cast<uint8_t>(get_authorization_scope()) & 0x03) << 2;
     if (!_is_at_expected_position()) {
         flags3 |= (1 << 7);
     }
@@ -1168,10 +1057,28 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
     packet[9] = flags3;
     memcpy(packet + 10, &encoded_elapsed_time, sizeof(encoded_elapsed_time));
 
+    // MAVLink channel RTCM stats. MAVLink channel 0 is the USB port and we
+    // do not really care about that, so we start from 1 (which is TELEM1) and
+    // also send the status of channel 2 (which is TELEM2).
+    for (uint8_t i = 1; i <= 2; i++) {
+        GCS_MAVLINK* gcs_chan;
+        int16_t count;
+
+        gcs_chan = gcs().chan(MAVLINK_COMM_0 + i);
+        count = gcs_chan ? gcs_chan->rtcm_message_counter().get_count() : -1;
+
+        // count == -1 means that we have never seen an RTCM message on
+        // this channel. However, for backward compatibility reasons we
+        // need to ensure that the packet can always be safely padded with
+        // zero bytes, therefore we need to post the count that we receive
+        // plus one -- hence the convoluted expression below.
+        packet[11 + i] = count < 0 ? 0 : ((count > 254 ? 254 : count) + 1);
+    }
+
     mavlink_msg_data16_send(
         chan,
         0x5b,   // Skybrush status packet type marker
-        12,     // effective packet length
+        14,     // effective packet length
         packet
     );
 }
@@ -1390,13 +1297,6 @@ void AC_DroneShowManager::_check_radio_failsafe()
     }
 }
 
-void AC_DroneShowManager::_clear_start_time_after_landing()
-{
-    _params.start_time_gps_sec.set(-1);
-    _start_time_on_internal_clock_usec = 0;
-    _check_changes_in_parameters();
-}
-
 void AC_DroneShowManager::_clear_start_time_if_set_by_switch()
 {
     if (_start_time_requested_by == StartTimeSource::RC_SWITCH) {
@@ -1556,29 +1456,6 @@ bool AC_DroneShowManager::_is_at_expected_position() const
     );
 }
 
-bool AC_DroneShowManager::_is_at_takeoff_position_xy(float xy_threshold) const
-{
-    Location takeoff_loc;
-    
-    if (!_tentative_show_coordinate_system.is_valid())
-    {
-        // User did not set up the takeoff position yet
-        return false;
-    }
-
-    if (!get_global_takeoff_position(takeoff_loc))
-    {
-        // Show coordinate system not set up yet
-        return false;
-    }
-
-    return _is_close_to_position(
-        takeoff_loc,
-        xy_threshold > 0 ? xy_threshold : _params.max_xy_placement_error_m,
-        0
-    );
-}
-
 bool AC_DroneShowManager::_is_close_to_position(
     const Location& target_loc, float xy_threshold, float z_threshold
 ) const
@@ -1618,328 +1495,6 @@ bool AC_DroneShowManager::_is_gps_time_ok() const
     // that the GPS subsystem receives iTOW information from the GPS module but
     // no week number; we deem this unreliable so we return false in this case.
     return AP::gps().time_week() > 0;
-}
-
-bool AC_DroneShowManager::is_prepared_to_take_off() const
-{
-    return (!_preflight_check_failures && _is_gps_time_ok());
-}
-
-bool AC_DroneShowManager::_load_show_file_from_storage()
-{
-    int fd;
-    int retval;
-    struct stat stat_data;
-    uint8_t *show_data, *write_ptr, *end_ptr;
-    ssize_t to_read, actually_read;
-    bool success = false;
-
-    // Clear any previously loaded show
-    _set_light_program_and_take_ownership(0);
-    _set_trajectory_and_take_ownership(0);
-    _set_yaw_control_and_take_ownership(0);
-    _set_show_data_and_take_ownership(0);
-
-    // Check whether the show file exists
-    retval = AP::FS().stat(SHOW_FILE, &stat_data);
-    if (retval)
-    {
-        // Show file does not exist. This basically means that the operation
-        // was successful.
-        return true;
-    }
-
-    // Ensure that we have a sensible block size that we will use when reading
-    // the show file
-    if (stat_data.st_blksize < 1)
-    {
-        stat_data.st_blksize = 4096;
-    }
-
-    // Allocate memory for the whole content of the file
-    show_data = static_cast<uint8_t *>(calloc(stat_data.st_size, sizeof(uint8_t)));
-    if (show_data == 0)
-    {
-        hal.console->printf(
-            "Show file too large: %ld bytes\n",
-            static_cast<long int>(stat_data.st_size));
-        return false;
-    }
-
-    // Read the entire show file into memory
-    fd = AP::FS().open(SHOW_FILE, O_RDONLY);
-    if (fd < 0)
-    {
-        free(show_data);
-        show_data = write_ptr = end_ptr = 0;
-    }
-    else
-    {
-        write_ptr = show_data;
-        end_ptr = show_data + stat_data.st_size;
-    }
-
-    while (write_ptr < end_ptr)
-    {
-        to_read = end_ptr - write_ptr;
-        if (to_read > stat_data.st_blksize)
-        {
-            to_read = stat_data.st_blksize;
-        }
-
-        if (to_read == 0)
-        {
-            break;
-        }
-
-        actually_read = AP::FS().read(fd, write_ptr, to_read);
-        if (actually_read < 0)
-        {
-            /* Error while reading */
-            hal.console->printf(
-                "IO error while reading show file near byte %ld, errno = %d\n",
-                static_cast<long int>(write_ptr - show_data),
-                static_cast<int>(errno)
-            );
-            free(show_data);
-            show_data = 0;
-            break;
-        }
-        else if (actually_read == 0)
-        {
-            /* EOF */
-            break;
-        }
-        else
-        {
-            write_ptr += actually_read;
-        }
-    }
-
-    if (fd > 0)
-    {
-        AP::FS().close(fd);
-    }
-
-    // Parse the show file and find the trajectory, light program and yaw control data in it
-    if (show_data)
-    {
-        sb_trajectory_t loaded_trajectory;
-        sb_light_program_t loaded_light_program;
-        sb_yaw_control_t loaded_yaw_control;
-
-        _set_show_data_and_take_ownership(show_data);
-
-        retval = sb_trajectory_init_from_binary_file_in_memory(&loaded_trajectory, show_data, stat_data.st_size);
-        if (retval)
-        {
-            hal.console->printf("Error while parsing show file: %d\n", (int) retval);
-        }
-        else
-        {
-            _set_trajectory_and_take_ownership(&loaded_trajectory);
-
-            if (has_valid_takeoff_time())
-            {
-                hal.console->printf(
-                    "Loaded show: %.1fs, takeoff at %.1fs, landing at %.1fs\n",
-                    _total_duration_sec, _takeoff_time_sec, _landing_time_sec
-                );
-                success = true;
-            }
-            else
-            {
-                hal.console->printf("Takeoff or landing time is invalid!\n");
-            }
-        }
-
-        retval = sb_light_program_init_from_binary_file_in_memory(&loaded_light_program, show_data, stat_data.st_size);
-        if (retval == SB_ENOENT)
-        {
-            // No light program in show file, this is okay, we just create an
-            // empty one
-            retval = sb_light_program_init_empty(&loaded_light_program);
-        }
-
-        if (retval)
-        {
-            hal.console->printf("Error while loading light program: %d\n", (int) retval);
-        }
-        else
-        {
-            _set_light_program_and_take_ownership(&loaded_light_program);
-        }
-
-        retval = sb_yaw_control_init_from_binary_file_in_memory(&loaded_yaw_control, show_data, stat_data.st_size);
-        if (retval == SB_ENOENT)
-        {
-            // No yaw control in show file, this is okay, we just create an
-            // empty one
-            _set_yaw_control_and_take_ownership(0);
-        }
-        else if (retval)
-        {
-            hal.console->printf("Error while parsing show file: %d\n", (int) retval);
-        }
-        else
-        {
-            _set_yaw_control_and_take_ownership(&loaded_yaw_control);
-        }
-
-    }
-
-    return success;
-}
-
-bool AC_DroneShowManager::_recalculate_trajectory_properties()
-{
-    sb_trajectory_stats_calculator_t stats_calculator;
-    sb_trajectory_stats_t stats;
-    sb_vector3_with_yaw_t vec;
-    bool success = false;
-
-    if (sb_trajectory_stats_calculator_init(&stats_calculator, 1000.0f /* [mm] */) != SB_SUCCESS)
-    {
-        return false;
-    }
-
-    if (sb_trajectory_player_get_position_at(_trajectory_player, 0, &vec) != SB_SUCCESS)
-    {
-        // Error while retrieving the first position
-        vec.x = vec.y = vec.z = 0;
-    }
-
-    _takeoff_position_mm.x = vec.x;
-    _takeoff_position_mm.y = vec.y;
-    _takeoff_position_mm.z = vec.z;
-
-    _total_duration_sec = 0;
-    _takeoff_time_sec = _landing_time_sec = -1;
-    _trajectory_is_circular = false;
-
-    stats_calculator.min_ascent = get_takeoff_altitude_cm() * 10.0f; /* [mm] */
-    stats_calculator.preferred_descent = stats_calculator.min_ascent;
-    stats_calculator.takeoff_speed = get_takeoff_speed_m_s() * 1000.0f; /* [mm/s] */
-    stats_calculator.acceleration = get_takeoff_acceleration_m_ss() * 1000.0f; /* [mm/s/s] */
-
-    if (sb_trajectory_stats_calculator_run(&stats_calculator, _trajectory, &stats) == SB_SUCCESS)
-    {
-        _total_duration_sec = stats.duration_sec;
-        _takeoff_time_sec = stats.takeoff_time_sec;
-        _landing_time_sec = stats.landing_time_sec;
-        success = true;
-    }
-
-    sb_trajectory_stats_calculator_destroy(&stats_calculator);
-
-    if (success)
-    {
-        // The trajectory is circular if the takeoff and landing positions are
-        // sufficiently close in the XY plane
-        _trajectory_is_circular = (
-            stats.start_to_end_distance_xy <=
-            DEFAULT_START_END_XY_DISTANCE_THRESHOLD_METERS * 1000.0f /* [mm] */
-        );
-
-        // We need to takeoff earlier due to expected motor spool up time
-        _takeoff_time_sec -= get_motor_spool_up_time_sec();
-
-        // Make sure that we never take off before the scheduled start of the
-        // show, even if we are going to be a bit late with the takeoff
-        if (_takeoff_time_sec < 0)
-        {
-            _takeoff_time_sec = 0;
-        }
-
-        // Check whether the landing time is later than the takeoff time. If it is
-        // earlier, it shows that there's something wrong with the trajectory so
-        // let's not take off at all.
-        success = _landing_time_sec >= _takeoff_time_sec;
-    }
-
-    if (!success)
-    {
-        // This should ensure that has_valid_takeoff_time() returns false
-        _landing_time_sec = _takeoff_time_sec = -1;
-    }
-
-    return true;
-}
-
-void AC_DroneShowManager::_set_light_program_and_take_ownership(sb_light_program_t *value)
-{
-    sb_light_player_destroy(_light_player);
-    sb_light_program_destroy(_light_program);
-
-    if (value)
-    {
-        *_light_program = *value;
-        _light_program_valid = true;
-    }
-    else
-    {
-        sb_light_program_init_empty(_light_program);
-        _light_program_valid = false;
-    }
-
-    sb_light_player_init(_light_player, _light_program);
-}
-
-void AC_DroneShowManager::_set_show_data_and_take_ownership(uint8_t *value)
-{
-    if (_show_data == value)
-    {
-        return;
-    }
-
-    if (_show_data)
-    {
-        free(_show_data);
-    }
-
-    _show_data = value;
-}
-
-void AC_DroneShowManager::_set_trajectory_and_take_ownership(sb_trajectory_t *value)
-{
-    sb_trajectory_player_destroy(_trajectory_player);
-    sb_trajectory_destroy(_trajectory);
-
-    if (value)
-    {
-        *_trajectory = *value;
-        _trajectory_valid = true;
-    }
-    else
-    {
-        sb_trajectory_init_empty(_trajectory);
-        _trajectory_valid = false;
-    }
-
-    sb_trajectory_player_init(_trajectory_player, _trajectory);
-
-    if (!_recalculate_trajectory_properties()) {
-        _trajectory_valid = false;
-    }
-}
-
-void AC_DroneShowManager::_set_yaw_control_and_take_ownership(sb_yaw_control_t *value)
-{
-    sb_yaw_player_destroy(_yaw_player);
-    sb_yaw_control_destroy(_yaw_control);
-
-    if (value)
-    {
-        *_yaw_control = *value;
-        _yaw_control_valid = true;
-    }
-    else
-    {
-        sb_yaw_control_init_empty(_yaw_control);
-        _yaw_control_valid = false;
-    }
-
-    sb_yaw_player_init(_yaw_player, _yaw_control);
 }
 
 void AC_DroneShowManager::_update_preflight_check_result(bool force)
@@ -1987,6 +1542,12 @@ float AC_DroneShowManager::ShowCoordinateSystem::convert_show_to_global_yaw_and_
     // show coordinates are in degrees relative to X axis orientation,
     // we need centidegrees relative to North
     return (degrees(orientation_rad) + yaw) * 100.0f;
+}
+
+void AC_DroneShowManager::ShowCoordinateSystem::convert_global_to_show_coordinate(
+    const Location& loc, sb_vector3_with_yaw_t& vec
+) const {
+    // TODO(ntamas)
 }
 
 void AC_DroneShowManager::ShowCoordinateSystem::convert_show_to_global_coordinate(

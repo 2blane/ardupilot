@@ -9,7 +9,9 @@
 #include <AP_Notify/RGBLed.h>
 #include <AP_Param/AP_Param.h>
 
+#include <AC_BubbleFence/AC_BubbleFence.h>
 #include <AC_HardFence/AC_HardFence.h>
+#include <AC_Fence/AC_Fence.h>
 #include <AC_WPNav/AC_WPNav.h>
 
 #include <skybrush/colors.h>
@@ -42,6 +44,7 @@ enum DroneShowModeStage {
     DroneShow_Landing,
     DroneShow_Landed,
     DroneShow_Error,
+    DroneShow_TestingLights,
 };
 
 // Enum representing the flags in the control mode bitmasp
@@ -50,7 +53,7 @@ enum DroneShowControlModeFlag {
     DroneShowControl_AccelerationControlEnabled = 2,
 };
 
-// Enum representing the authorization types for the start of the show
+// Enum representing the authorization scopes for the start of the show
 enum DroneShowAuthorization : int8_t {
     // Show not authorized to start
     DroneShowAuthorization_Revoked = 0,
@@ -145,6 +148,10 @@ private:
         // Clears the show coordinate system, resetting the origin back to Null Island
         void clear();
 
+        // Converts a coordinate given in the global GPS coordinate system to
+        // the show coordinate system, in millimeters
+        void convert_global_to_show_coordinate(const Location& loc, sb_vector3_with_yaw_t& vec) const;
+
         // Converts a coordinate given in the show coordinate system, in millimeters, to
         // the global GPS coordinate system
         void convert_show_to_global_coordinate(sb_vector3_with_yaw_t vec, Location& loc) const;
@@ -231,12 +238,16 @@ public:
         int32_t lat, int32_t lon, int32_t amsl_mm, float orientation_deg
     ) WARN_IF_UNUSED;
 
-    // Returns the current authorization type of the show
-    DroneShowAuthorization get_authorization_type() const;
+    // Returns the current authorization scope of the show
+    DroneShowAuthorization get_authorization_scope() const;
+
+    // Returns the color of the LED light on the drone according to its light
+    // program.
+    sb_rgb_color_t get_desired_color_of_rgb_light();
 
     // Returns the color of the LED light on the drone according to its light
     // program the given number of seconds after the start time.
-    void get_color_of_rgb_light_at_seconds(float time, sb_rgb_color_t* color);
+    sb_rgb_color_t get_desired_color_of_rgb_light_at_seconds(float time);
 
     // Returns the preferred duration between consecutive guided mode commands
     // during the execution of the show.
@@ -292,6 +303,9 @@ public:
     // it returns the action set in the SHOW_POST_ACTION parameter. Note that
     // the function is guaranteed never to return PostAction_RTLOrLand
     PostAction get_action_at_end_of_show() const;
+
+    // Returns the action to be performed by the bubble fence module
+    AC_BubbleFence::FenceAction get_bubble_fence_action();
 
     // Retrieves the position where the drone is supposed to be at the start of the show.
     // Returns true if successful or false if the show coordinate system was not set up
@@ -471,9 +485,6 @@ public:
     // Notifies the drone show manager that a guided mode command was sent to the drone
     void notify_guided_mode_command_sent(const GuidedModeCommand& command);
 
-    // Notifies the drone show manager that the drone has landed after the show
-    void notify_landed();
-
     // Notifies the drone show manager that the takeoff is about to take place.
     // The drone show manager may decide to cancel the takeoff by returning false.
     bool notify_takeoff_attempt() WARN_IF_UNUSED;
@@ -529,8 +540,11 @@ public:
     // Returns whether the manager uses GPS time to start the show
     bool uses_gps_time_for_show_start() const { return _params.time_sync_mode == TimeSyncMode_GPS; }
 
-    // Writes the log message specific to the drone show manager subsystem into the logs
-    void write_log_message() const;
+    // Writes a message containing a summary of the gefence status into the logs
+    void write_fence_status_log_message() const;
+
+    // Writes a message holding the status of the drone show subsystem into the logs
+    void write_show_status_log_message() const;
 
     static const struct AP_Param::GroupInfo var_info[];
 
@@ -539,6 +553,9 @@ public:
     // ourselves to the SHOW_ parameter group only, and that one is managed by
     // AC_DroneShowManager.
     AC_HardFence hard_fence;
+
+    // Bubble fence subsystem. See also the comment for the hard fence.
+    AC_BubbleFence bubble_fence;
 
     // Takeoff acceleration; we assume that the drone attempts to take off with
     // this vertical acceleration if WPNAV_ACCEL_Z seems invalid
@@ -573,7 +590,7 @@ private:
         // Orientation of drone show coordinate system, in degrees, as set in the parameters by the user
         AP_Float orientation_deg;
 
-        // Authorization type of the show; see the DroneShowAuthorization enum
+        // Authorization scope of the show; see the DroneShowAuthorization enum
         AP_Int8 authorization;
 
         // Whether the drone should boot in show mode, and whether we should enter show mode automatically when authorized
@@ -623,6 +640,9 @@ private:
 
             // Color temperature of the white LED when the LED light channel uses an extra white LED
             AP_Float white_temperature;
+
+            // Minimum brightness threshold (as a ratio 0-1) below which LED is turned off
+            AP_Float min_brightness;
         } led_specs[1];
 
         // Action to take at the end of the show
@@ -721,6 +741,12 @@ private:
     // it started. This is used to determine whether the drone should land or
     // return to the takeoff position at the end of the show.
     bool _trajectory_is_circular;
+    
+    // Flag to indicate whether we have already modified the trajectory to
+    // ensure precision landing back to the exact takeoff position (even if the
+    // drone is slightly misplaced). This is used to avoid modifying the trajectory
+    // multiple times when the show is restarted.
+    bool _trajectory_modified_for_landing;
 
     // Flag that is set to true if the user has instructed the drone show manager
     // to cancel the show as soon as possible. This is checked regularly by
@@ -784,6 +810,10 @@ private:
         ShowCoordinateSystem& coordinate_system
     ) const;
 
+    // Creates the directory in which the drone show specific files are stored
+    // on the filesystem
+    bool _create_show_directory();
+
     // Produces an internally triggered light signal that indicates a failed
     // operation (like a successful compass calibration)
     void _flash_leds_after_failure();
@@ -825,6 +855,9 @@ private:
 
     // Handles a MAVLink LED_CONTROL message from the ground station.
     bool _handle_led_control_message(const mavlink_message_t& msg);
+
+    // Callback that is called when entering the "landed" stage
+    void _handle_switch_to_landed_state();
 
     // Returns whether the drone is close enough to its expected position during a show.
     // Returns true unconditionally if the drone is not performing a show.

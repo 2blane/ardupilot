@@ -45,6 +45,12 @@ enum DroneShowLEDType {
 
     // LED light is driven by ArduPilot's AP_Notify framework
     DroneShowLEDType_Notify = 12,
+
+    // LED light is attached to servo channels and respects configured min/max limits; off is always mapped to 0
+    DroneShowLEDType_ServoWithLimits_OffIsZero = 13,
+
+    // LED light is attached to servo channels and respects configured min/max limits; zero not handled differently
+    DroneShowLEDType_ServoWithLimits = 14,
 };
 
 class DroneShowLEDFactory
@@ -58,10 +64,11 @@ public:
 
     /**
      * Creates a new DroneShowLED instance, given the LED type, the channel
-     * index (if the LED type support multiple channels), and the number of
-     * LEDs on this channel (for NeoPixel or ProfiLED strips).
+     * index (if the LED type support multiple channels), the number of
+     * LEDs on this channel (for NeoPixel or ProfiLED strips), and the
+     * minimum brightness threshold.
      */
     DroneShowLED* new_rgb_led_by_type(
-        DroneShowLEDType type, uint8_t channel, uint8_t num_leds
+        DroneShowLEDType type, uint8_t channel, uint8_t num_leds, float min_brightness
     );
 };

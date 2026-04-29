@@ -180,6 +180,11 @@ void ModeDroneShow::run()
         error_run();
         break;
 
+    case DroneShow_TestingLights:
+        // testing light program without starting motors
+        light_testing_run();
+        break;
+
     default:
         break;
     }
@@ -194,7 +199,7 @@ void ModeDroneShow::check_changes_in_parameters()
     uint64_t current_start_time;
 
     current_start_time = copter.g2.drone_show_manager.get_start_time_epoch_undefined();
-    current_authorization = copter.g2.drone_show_manager.get_authorization_type();
+    current_authorization = copter.g2.drone_show_manager.get_authorization_scope();
 
     if (current_start_time != last_seen_start_time) {
         last_seen_start_time = current_start_time;
@@ -363,7 +368,8 @@ void ModeDroneShow::wait_for_start_time_start()
 // waits for the start time of the show
 void ModeDroneShow::wait_for_start_time_run()
 {
-    float time_until_takeoff_sec = copter.g2.drone_show_manager.get_time_until_takeoff_sec();
+    AC_DroneShowManager_Copter& show_manager = copter.g2.drone_show_manager;
+    float time_until_takeoff_sec = show_manager.get_time_until_takeoff_sec();
     float time_since_takeoff_sec = -time_until_takeoff_sec;
     const float latest_takeoff_attempt_after_scheduled_takeoff_time_in_seconds = 5.0f;
 
@@ -431,7 +437,7 @@ void ModeDroneShow::wait_for_start_time_run()
         }
 
         // Handle starting or stopping the motors depending on the authorization
-        if (copter.g2.drone_show_manager.has_authorization_to_start_motors()) {
+        if (show_manager.has_authorization_to_start_motors()) {
             if (time_until_takeoff_sec <= 8 && !_motors_started) {
                 // We attempt to start the motors 8 seconds before our takeoff time,
                 // and we keep on doing so until 5 seconds after the takeoff time, when
@@ -467,6 +473,15 @@ void ModeDroneShow::wait_for_start_time_run()
                 }
 
                 _motors_started = false;
+            }
+
+            // If we are authorized to test the lights, check whether it is
+            // time to start the test
+            if (show_manager.get_authorization_scope() == DroneShowAuthorization_Granted_Lights_Only) {
+                float to_wait = show_manager.get_time_until_start_sec();
+                if (to_wait <= 0) {
+                    light_testing_start();
+                }
             }
         }
     }
@@ -536,6 +551,14 @@ void ModeDroneShow::takeoff_start()
     // set yaw target to initial bearing where we were armed. Note that the yaw
     // input of the pilot will override this in auto_takeoff.run() if an RC is
     // connected and pilot yaw input in guided mode is allowed.
+    //
+    // Note the order of function calls here due to how AutoYaw::set_fixed_yaw()
+    // is structured as of ArduCopter 4.5. If we use absolute angles, the routine
+    // will start from the current yaw angle in the AutoYaw instance (which could
+    // be zero if it was never used) and slowly slew to the desired angle. We
+    // force the current yaw angle to be initialized by also calling
+    // set_yaw_angle_rate(), which seems to set the internal yaw angle immediately
+    auto_yaw.set_yaw_angle_rate(get_default_yaw_cd() * 0.01f, 0);
     auto_yaw.set_fixed_yaw(
         get_default_yaw_cd() * 0.01f,  /* [cd] -> [deg] */
         /* turn_rate_dps = */ 0, /* direction = */ 0, /* relative_angle = */ 0
@@ -580,6 +603,12 @@ void ModeDroneShow::takeoff_run()
 
             case DroneShow_Landing:
             case DroneShow_Landed:
+                landing_start();
+                break;
+
+            case DroneShow_TestingLights:
+                // light testing is done when landed so this is an erroneous
+                // configuration -- just land
                 landing_start();
                 break;
 
@@ -661,7 +690,10 @@ bool ModeDroneShow::takeoff_completed() const
              */
             return wp_nav->reached_wp_destination() && takeoff_timed_out();
         }
-    } else if (_stage >= DroneShow_Performing && _stage <= DroneShow_Landed) {
+    } else if (
+        (_stage >= DroneShow_Performing && _stage <= DroneShow_Landed) ||
+        _stage == DroneShow_TestingLights
+    ) {
         return true;
     } else {
         return false;
@@ -858,8 +890,6 @@ void ModeDroneShow::loiter_run()
 void ModeDroneShow::landed_start()
 {
     _set_stage(DroneShow_Landed);
-
-    copter.g2.drone_show_manager.notify_landed();
 }
 
 // performs the landed stage where we do nothing any more
@@ -901,6 +931,34 @@ void ModeDroneShow::error_run()
     if (AP::arming().is_armed()) {
         AP::arming().disarm(AP_Arming::Method::SCRIPTING);
     }
+}
+
+// starts the light testing phase on the ground
+void ModeDroneShow::light_testing_start()
+{
+    _set_stage(DroneShow_TestingLights);
+}
+
+// performs the light testing stage where we do nothing any more except waiting
+// for the light program to finish
+void ModeDroneShow::light_testing_run()
+{
+    // Ensure that we stay disarmed even if someone tries to arm us remotely
+    if (AP::arming().is_armed()) {
+        AP::arming().disarm(AP_Arming::Method::SCRIPTING);
+    }
+
+    if (!copter.g2.drone_show_manager.has_authorization()) {
+        initialization_start();
+    } else if (light_testing_completed()) {
+        landed_start();
+    }
+}
+
+// returns whether we should exit the light testing mode
+bool ModeDroneShow::light_testing_completed() const
+{
+    return copter.g2.drone_show_manager.get_time_until_landing_sec() <= 0;
 }
 
 // Handler function that is called when the authorization state of the show has

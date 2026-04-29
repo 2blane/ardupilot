@@ -181,7 +181,8 @@
 #if MODE_DRONE_SHOW_ENABLED == ENABLED
  #include "mode_drone_show.h"
  #if AP_FENCE_ENABLED
-  #include <AC_HardFence/AC_HardFence.h>
+ #include <AC_BubbleFence/AC_BubbleFence.h>
+ #include <AC_HardFence/AC_HardFence.h>
  #endif
 #endif
 
@@ -838,12 +839,17 @@ private:
     // fence.cpp
 #if AP_FENCE_ENABLED
     void fence_check();
-    void fence_and_hard_fence_check();
+    void fence_and_show_specific_safety_features_check();
 #endif
 
     // hard_fence.cpp
 #if MODE_DRONE_SHOW_ENABLED == ENABLED && AP_FENCE_ENABLED
     void hard_fence_check();
+#endif
+
+    // bubble_fence.cpp
+#if MODE_DRONE_SHOW_ENABLED == ENABLED && AP_FENCE_ENABLED
+    void bubble_fence_check();
 #endif
 
     // heli.cpp
@@ -1089,6 +1095,9 @@ private:
     // mode.cpp
     Mode *mode_from_mode_num(const Mode::Number mode);
     void exit_mode(Mode *&old_flightmode, Mode *&new_flightmode);
+
+    // force_disarm.cpp
+    void force_disarm_without_questions(const AP_Arming::Method method);
 
 public:
     void failsafe_check();      // failsafe.cpp
