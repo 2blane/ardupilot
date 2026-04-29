@@ -42,6 +42,16 @@ extern const AP_HAL::HAL &hal;
 
 #define MMC5983_ID 0x30
 
+// MMC5603NJ registers (incompatible register map vs MMC5983)
+#define MMC5603_REG_PRODUCT_ID       0x39
+#define MMC5603_ID                   0x10
+#define MMC5603_REG_STATUS           0x18  // Status1
+#define MMC5603_STATUS_MEAS_DONE     0x40  // bit 6: Meas_m_done
+#define MMC5603_REG_CONTROL0         0x1B  // Internal control 0
+#define MMC5603_REG_CONTROL1         0x1C  // Internal control 1
+// Control bit positions match MMC5983: TMM=bit0, Set=bit3, Reset=bit4, SW_RST=bit7
+#define MMC5603_SENSITIVITY          1024U // counts/Gauss in 16-bit mode (±30G FSR)
+
 AP_Compass_Backend *AP_Compass_MMC5XX3::probe(AP_HAL::OwnPtr<AP_HAL::Device> dev,
                                               bool force_external,
                                               enum Rotation rotation)
@@ -89,33 +99,60 @@ bool AP_Compass_MMC5XX3::init()
         hal.scheduler->delay(5);
     }
 
+    is_5603 = false;
     if (whoami != MMC5983_ID) {
-        printf("MMC5983 got unexpected product id: %d, expected: %d\n", whoami, MMC5983_ID);
-        // not a MMC5983
-        return false;
+        // Check for MMC5603NJ — different product ID register and value
+        whoami = 0;
+        tries = 10;
+        while (whoami == 0 && tries > 0) {
+            tries--;
+            dev->read_registers(MMC5603_REG_PRODUCT_ID, &whoami, 1);
+            hal.scheduler->delay(5);
+        }
+        if (whoami != MMC5603_ID) {
+            printf("MMC5xx3: unexpected product id 0x%02x\n", whoami);
+            // not a supported MMC5xx3 variant
+            return false;
+        }
+        is_5603 = true;
     }
 
-    // reset sensor
-    dev->write_register(REG_CONTROL1, REG_CONTROL1_SW_RST);
+    // set chip-variant register map and sensitivity
+    if (is_5603) {
+        reg_control0          = MMC5603_REG_CONTROL0;
+        reg_status            = MMC5603_REG_STATUS;
+        status_meas_done_mask = MMC5603_STATUS_MEAS_DONE;
+        counts_per_gauss      = MMC5603_SENSITIVITY;
+    } else {
+        reg_control0          = REG_CONTROL0;
+        reg_status            = REG_STATUS;
+        status_meas_done_mask = 0x01;
+        counts_per_gauss      = 4096U;
+    }
 
-    // 10ms minimum startup time
-    hal.scheduler->delay(15);
+    // reset sensor (SW_RST bit is bit 7 on both variants, just different register addresses)
+    const uint8_t ctrl1_reg = is_5603 ? MMC5603_REG_CONTROL1 : REG_CONTROL1;
+    dev->write_register(ctrl1_reg, REG_CONTROL1_SW_RST);
+
+    // MMC5603NJ requires 20ms startup; MMC5983 needs 10ms
+    hal.scheduler->delay(is_5603 ? 20 : 15);
 
     // setup for 100Hz output
-    if (!dev->write_register(REG_CONTROL1, 0)) {
+    if (!dev->write_register(ctrl1_reg, 0)) {
         return false;
     }
 
 
     /* register the compass instance in the frontend */
-    dev->set_device_type(DEVTYPE_MMC5983);
+    dev->set_device_type(is_5603 ? DEVTYPE_MMC5603 : DEVTYPE_MMC5983);
     if (!register_compass(dev->get_bus_id(), compass_instance)) {
         return false;
     }
 
     set_dev_id(compass_instance, dev->get_bus_id());
 
-    printf("Found a MMC5983 on 0x%x as compass %u\n", dev->get_bus_id(), compass_instance);
+    printf("Found a %s on 0x%x as compass %u\n",
+           is_5603 ? "MMC5603NJ" : "MMC5983", dev->get_bus_id(), compass_instance);
 
     set_rotation(compass_instance, rotation);
 
@@ -138,8 +175,8 @@ void AP_Compass_MMC5XX3::timer()
     // sensor is read at about 100Hz, so about every 10 seconds
     const uint16_t measure_count_limit = 1000U;
     const uint16_t zero_offset = 32768U; // 16 bit mode
-    const uint16_t sensitivity = 4096U; // counts per Gauss, 16 bit mode
-    constexpr float counts_to_milliGauss = 1.0e3f / sensitivity;
+    // use chip-specific sensitivity set in init()
+    const float counts_to_milliGauss = 1.0e3f / counts_per_gauss;
 
     /*
       we use the SET/RESET method to remove bridge offset every
@@ -151,7 +188,7 @@ void AP_Compass_MMC5XX3::timer()
 
     // perform a set operation
     case MMCState::STATE_SET: {
-        if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_SET)) {
+        if (!dev->write_register(reg_control0, REG_CONTROL0_SET)) {
             break;
         }
         // minimum time to wait after set/reset before take measurement request is 1ms
@@ -161,7 +198,7 @@ void AP_Compass_MMC5XX3::timer()
 
     // request a measurement for field and offset calculation after set operation
     case MMCState::STATE_SET_MEASURE: {
-        if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_TMM)) {
+        if (!dev->write_register(reg_control0, REG_CONTROL0_TMM)) {
             break;
         }
         state = MMCState::STATE_SET_WAIT;
@@ -172,13 +209,13 @@ void AP_Compass_MMC5XX3::timer()
     // measurement data and request a reset operation
     case MMCState::STATE_SET_WAIT: {
         uint8_t status;
-        if (!dev->read_registers(REG_STATUS, &status, 1)) {
+        if (!dev->read_registers(reg_status, &status, 1)) {
             state = MMCState::STATE_SET;
             break;
         }
 
         // check if measurement is ready
-        if (!(status & 1)) {
+        if (!(status & status_meas_done_mask)) {
             break;
         }
 
@@ -189,7 +226,7 @@ void AP_Compass_MMC5XX3::timer()
         }
 
         // request set operation
-        if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_RESET)) {
+        if (!dev->write_register(reg_control0, REG_CONTROL0_RESET)) {
             break;
         }
         // minimum time to wait after set/reset before take measurement request is 1ms
@@ -200,7 +237,7 @@ void AP_Compass_MMC5XX3::timer()
     // request a measurement for field and offset calculation after reset operation
     case MMCState::STATE_RESET_MEASURE: {
         // take measurement request
-        if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_TMM)) {
+        if (!dev->write_register(reg_control0, REG_CONTROL0_TMM)) {
             state = MMCState::STATE_SET;
             break;
         }
@@ -214,12 +251,12 @@ void AP_Compass_MMC5XX3::timer()
     // and begin requesting field measurements
     case MMCState::STATE_RESET_WAIT: {
         uint8_t status;
-        if (!dev->read_registers(REG_STATUS, &status, 1)) {
+        if (!dev->read_registers(reg_status, &status, 1)) {
             state = MMCState::STATE_SET;
             break;
         }
         // check if measurement is ready
-        if (!(status & 1)) {
+        if (!(status & status_meas_done_mask)) {
             break;
         }
 
@@ -252,7 +289,7 @@ void AP_Compass_MMC5XX3::timer()
 
         accumulate_sample(field, compass_instance);
 
-        if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_TMM)) {
+        if (!dev->write_register(reg_control0, REG_CONTROL0_TMM)) {
             printf("failed to initiate measurement\n");
             state = MMCState::STATE_SET;
         } else {
@@ -266,13 +303,13 @@ void AP_Compass_MMC5XX3::timer()
     // measure_count_limit measurements
     case MMCState::STATE_MEASURE: {
         uint8_t status;
-        if (!dev->read_registers(REG_STATUS, &status, 1)) {
+        if (!dev->read_registers(reg_status, &status, 1)) {
             state = MMCState::STATE_SET;
             break;
         }
 
         // check if measurement is ready
-        if (!(status & 1)) {
+        if (!(status & status_meas_done_mask)) {
             break;
         }
 
@@ -295,7 +332,7 @@ void AP_Compass_MMC5XX3::timer()
             measure_count = 0;
             state = MMCState::STATE_SET;
         } else {
-            if (!dev->write_register(REG_CONTROL0, REG_CONTROL0_TMM)) { // Take Measurement
+            if (!dev->write_register(reg_control0, REG_CONTROL0_TMM)) { // Take Measurement
                 state = MMCState::STATE_SET;
             }
         }

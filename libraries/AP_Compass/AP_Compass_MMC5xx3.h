@@ -71,6 +71,13 @@ private:
     bool have_initial_offset;
     uint32_t refill_start_ms;
     uint32_t last_sample_ms;
+
+    // chip-variant registers and parameters, set during init()
+    bool is_5603;
+    uint8_t reg_control0;
+    uint8_t reg_status;
+    uint8_t status_meas_done_mask;
+    uint16_t counts_per_gauss;
     
     uint8_t data0[6];
     

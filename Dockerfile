@@ -7,7 +7,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG USER_NAME=ardupilot
 ARG USER_UID=1000
 ARG USER_GID=1000
-ARG SKIP_AP_EXT_ENV=1
+ARG SKIP_AP_EXT_ENV=0
 ARG SKIP_AP_GRAPHIC_ENV=1
 ARG SKIP_AP_COV_ENV=1
 ARG SKIP_AP_GIT_CHECK=1
@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     lsb-release \
     sudo \
     tzdata \
-    bash-completion
+    bash-completion \
+    rsync
 
 COPY Tools/environment_install/install-prereqs-ubuntu.sh /ardupilot/Tools/environment_install/
 COPY Tools/completion /ardupilot/Tools/completion/

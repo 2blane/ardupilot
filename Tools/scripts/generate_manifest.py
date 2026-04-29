@@ -86,6 +86,7 @@ brand_map = {
     'omnibusf4v6' : ('Omnibus F4 V6', 'Airbot'),
     'OmnibusNanoV6' : ('Omnibus Nano V6', 'Airbot'),
     'OmnibusNanoV6-bdshot' : ('Omnibus Nano V6', 'Airbot'),
+    'Starbound' : ('Starbound', 'Starbound Labs'),
     'speedybeef4' : ('SpeedyBee F4', 'SpeedyBee'),
     'speedybeef4v3' : ('SpeedyBee F4 v3', 'SpeedyBee'),
     'QioTekZealotF427' : ('ZealotF427', 'QioTek'),
