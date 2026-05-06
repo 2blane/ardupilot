@@ -273,6 +273,19 @@ AP_Baro::AP_Baro()
     _field_elevation_active = _field_elevation;
 }
 
+void AP_Baro::_set_init_error(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    hal.util->vsnprintf(_init_error, sizeof(_init_error), fmt, ap);
+    va_end(ap);
+}
+
+void AP_Baro::_clear_init_error(void)
+{
+    _init_error[0] = '\0';
+}
+
 // calibrate the barometer. This must be called at least once before
 // the altitude() or climb_rate() interfaces can be used
 void AP_Baro::calibrate(bool save)
@@ -580,6 +593,7 @@ bool AP_Baro::_have_i2c_driver(uint8_t bus, uint8_t address) const
 void AP_Baro::init(void)
 {
     init_done = true;
+    _clear_init_error();
 
     // always set field elevation to zero on reboot in the case user
     // fails to update.  TBD automate sanity checking error bounds on
@@ -783,6 +797,9 @@ void AP_Baro::init(void)
     }
 #endif
     if (_num_drivers == 0 || _num_sensors == 0 || drivers[0] == nullptr) {
+        if (_init_error[0] != '\0') {
+            AP_BoardConfig::config_error("Baro: %s", _init_error);
+        }
         AP_BoardConfig::config_error("Baro: unable to initialise driver");
     }
 #endif

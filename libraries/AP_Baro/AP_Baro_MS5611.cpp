@@ -54,6 +54,21 @@ static const uint8_t CMD_MS56XX_PROM = 0xA0;
 static const uint8_t ADDR_CMD_CONVERT_PRESSURE = ADDR_CMD_CONVERT_D1_OSR1024;
 static const uint8_t ADDR_CMD_CONVERT_TEMPERATURE = ADDR_CMD_CONVERT_D2_OSR1024;
 
+static const char *ms56xx_name(AP_Baro_MS56XX::MS56XX_TYPE ms56xx_type)
+{
+    switch (ms56xx_type) {
+    case AP_Baro_MS56XX::BARO_MS5607:
+        return "MS5607";
+    case AP_Baro_MS56XX::BARO_MS5611:
+        return "MS5611";
+    case AP_Baro_MS56XX::BARO_MS5837:
+        return "MS5837";
+    case AP_Baro_MS56XX::BARO_MS5637:
+        return "MS5637";
+    }
+    return "MS56XX";
+}
+
 /*
   constructor
  */
@@ -69,6 +84,8 @@ AP_Baro_Backend *AP_Baro_MS56XX::probe(AP_Baro &baro,
                                        enum MS56XX_TYPE ms56xx_type)
 {
     if (!dev) {
+        DEV_PRINTF("%s probe failed: null device\n", ms56xx_name(ms56xx_type));
+        baro._set_init_error("%s probe failed: null device", ms56xx_name(ms56xx_type));
         return nullptr;
     }
     AP_Baro_MS56XX *sensor = new AP_Baro_MS56XX(baro, std::move(dev), ms56xx_type);
@@ -82,6 +99,8 @@ AP_Baro_Backend *AP_Baro_MS56XX::probe(AP_Baro &baro,
 bool AP_Baro_MS56XX::_init()
 {
     if (!_dev) {
+        DEV_PRINTF("MS56XX init failed: null device\n");
+        _frontend._set_init_error("MS56XX init failed: null device");
         return false;
     }
 
@@ -93,7 +112,20 @@ bool AP_Baro_MS56XX::_init()
     uint16_t prom[8];
     bool prom_read_ok = false;
 
-    _dev->transfer(&CMD_MS56XX_RESET, 1, nullptr, 0);
+    const char *name = ms56xx_name(_ms56xx_type);
+
+    if (!_dev->transfer(&CMD_MS56XX_RESET, 1, nullptr, 0)) {
+        DEV_PRINTF("%s reset transfer failed on bus %u address 0x%02x\n",
+                   name,
+                   _dev->bus_num(),
+                   _dev->get_bus_address());
+        _frontend._set_init_error("%s reset transfer failed bus %u addr 0x%02x",
+                                  name,
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address());
+        _dev->get_semaphore()->give();
+        return false;
+    }
     hal.scheduler->delay(4);
 
     /*
@@ -101,27 +133,35 @@ bool AP_Baro_MS56XX::_init()
      */
     if (_ms56xx_type == BARO_MS5611 && _frontend.option_enabled(AP_Baro::Options::TreatMS5611AsMS5607)) {
         _ms56xx_type = BARO_MS5607;
+        name = ms56xx_name(_ms56xx_type);
     }
-    
-    const char *name = "MS5611";
+
     switch (_ms56xx_type) {
     case BARO_MS5607:
-        name = "MS5607";
-        FALLTHROUGH;
+        prom_read_ok = _read_prom_5607(prom);
+        break;
     case BARO_MS5611:
         prom_read_ok = _read_prom_5611(prom);
         break;
     case BARO_MS5837:
-        name = "MS5837";
         prom_read_ok = _read_prom_5637(prom);
         break;
     case BARO_MS5637:
-        name = "MS5637";
         prom_read_ok = _read_prom_5637(prom);
         break;
     }
 
     if (!prom_read_ok) {
+        DEV_PRINTF("%s PROM read failed on bus %u address 0x%02x\n",
+                   name,
+                   _dev->bus_num(),
+                   _dev->get_bus_address());
+        if (_frontend._init_error[0] == '\0') {
+            _frontend._set_init_error("%s PROM read failed bus %u addr 0x%02x",
+                                      name,
+                                      _dev->bus_num(),
+                                      _dev->get_bus_address());
+        }
         _dev->get_semaphore()->give();
         return false;
     }
@@ -197,6 +237,86 @@ uint32_t AP_Baro_MS56XX::_read_adc()
     return (val[0] << 16) | (val[1] << 8) | val[2];
 }
 
+bool AP_Baro_MS56XX::_read_prom_5607(uint16_t prom[8])
+{
+    // Some MS5607 modules encode CRC nibble like MS5611 while others match MS5637 layout.
+    bool all_zero = true;
+    for (uint8_t i = 0; i < 8; i++) {
+        prom[i] = _read_prom_word(i);
+        if (prom[i] != 0) {
+            all_zero = false;
+        }
+    }
+
+    if (all_zero) {
+        DEV_PRINTF("%s PROM read returned all zeros on bus %u address 0x%02x\n",
+                   ms56xx_name(_ms56xx_type),
+                   _dev->bus_num(),
+                   _dev->get_bus_address());
+        _frontend._set_init_error("%s PROM all zero bus %u addr 0x%02x",
+                                  ms56xx_name(_ms56xx_type),
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address());
+        return false;
+    }
+
+    uint16_t prom1[8];
+    uint16_t prom2[8];
+    for (uint8_t i = 0; i < 8; i++) {
+        prom1[i] = prom[i];
+        prom2[i] = prom[i];
+    }
+
+    // Layout 1: CRC nibble in PROM[7] low bits (MS5611-style)
+    const uint16_t crc_read_5611 = prom1[7] & 0xf;
+    prom1[7] &= 0xff00;
+    const uint16_t crc_calc_5611 = crc_crc4(prom1);
+    if (crc_read_5611 == crc_calc_5611) {
+        for (uint8_t i = 0; i < 8; i++) {
+            prom[i] = prom1[i];
+        }
+        return true;
+    }
+
+    // Layout 2: CRC nibble in PROM[0] high bits, PROM[7] zeroed (MS5637-style)
+    prom2[7] = 0;
+    const uint16_t crc_read_5637 = (prom2[0] & 0xf000) >> 12;
+    prom2[0] &= ~0xf000;
+    const uint16_t crc_calc_5637 = crc_crc4(prom2);
+    if (crc_read_5637 == crc_calc_5637) {
+        for (uint8_t i = 0; i < 8; i++) {
+            prom[i] = prom2[i];
+        }
+        return true;
+    }
+
+    DEV_PRINTF("%s PROM CRC mismatch on bus %u address 0x%02x 5611[r=%u c=%u] 5637[r=%u c=%u] prom=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x\n",
+               ms56xx_name(_ms56xx_type),
+               _dev->bus_num(),
+               _dev->get_bus_address(),
+               (unsigned)crc_read_5611,
+               (unsigned)crc_calc_5611,
+               (unsigned)crc_read_5637,
+               (unsigned)crc_calc_5637,
+               (unsigned)prom[0],
+               (unsigned)prom[1],
+               (unsigned)prom[2],
+               (unsigned)prom[3],
+               (unsigned)prom[4],
+               (unsigned)prom[5],
+               (unsigned)prom[6],
+               (unsigned)prom[7]);
+    _frontend._set_init_error("%s PROM CRC mismatch bus %u addr 0x%02x 5611[r=%u c=%u] 5637[r=%u c=%u]",
+                              ms56xx_name(_ms56xx_type),
+                              _dev->bus_num(),
+                              _dev->get_bus_address(),
+                              (unsigned)crc_read_5611,
+                              (unsigned)crc_calc_5611,
+                              (unsigned)crc_read_5637,
+                              (unsigned)crc_calc_5637);
+    return false;
+}
+
 bool AP_Baro_MS56XX::_read_prom_5611(uint16_t prom[8])
 {
     /*
@@ -215,6 +335,14 @@ bool AP_Baro_MS56XX::_read_prom_5611(uint16_t prom[8])
     }
 
     if (all_zero) {
+        DEV_PRINTF("%s PROM read returned all zeros on bus %u address 0x%02x\n",
+                   ms56xx_name(_ms56xx_type),
+                   _dev->bus_num(),
+                   _dev->get_bus_address());
+        _frontend._set_init_error("%s PROM all zero bus %u addr 0x%02x",
+                                  ms56xx_name(_ms56xx_type),
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address());
         return false;
     }
 
@@ -224,7 +352,32 @@ bool AP_Baro_MS56XX::_read_prom_5611(uint16_t prom[8])
     /* remove CRC byte */
     prom[7] &= 0xff00;
 
-    return crc_read == crc_crc4(prom);
+    const uint16_t crc_calc = crc_crc4(prom);
+    if (crc_read != crc_calc) {
+        DEV_PRINTF("%s PROM CRC mismatch on bus %u address 0x%02x read=%u calc=%u prom=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x\n",
+                   ms56xx_name(_ms56xx_type),
+                   _dev->bus_num(),
+                   _dev->get_bus_address(),
+                   (unsigned)crc_read,
+                   (unsigned)crc_calc,
+                   (unsigned)prom[0],
+                   (unsigned)prom[1],
+                   (unsigned)prom[2],
+                   (unsigned)prom[3],
+                   (unsigned)prom[4],
+                   (unsigned)prom[5],
+                   (unsigned)prom[6],
+                   (unsigned)prom[7]);
+        _frontend._set_init_error("%s PROM CRC mismatch bus %u addr 0x%02x read=%u calc=%u",
+                                  ms56xx_name(_ms56xx_type),
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address(),
+                                  (unsigned)crc_read,
+                                  (unsigned)crc_calc);
+        return false;
+    }
+
+    return true;
 }
 
 bool AP_Baro_MS56XX::_read_prom_5637(uint16_t prom[8])
@@ -246,6 +399,14 @@ bool AP_Baro_MS56XX::_read_prom_5637(uint16_t prom[8])
     }
 
     if (all_zero) {
+        DEV_PRINTF("%s PROM read returned all zeros on bus %u address 0x%02x\n",
+                   ms56xx_name(_ms56xx_type),
+                   _dev->bus_num(),
+                   _dev->get_bus_address());
+        _frontend._set_init_error("%s PROM all zero bus %u addr 0x%02x",
+                                  ms56xx_name(_ms56xx_type),
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address());
         return false;
     }
 
@@ -257,7 +418,32 @@ bool AP_Baro_MS56XX::_read_prom_5637(uint16_t prom[8])
     /* remove CRC byte */
     prom[0] &= ~0xf000;
 
-    return crc_read == crc_crc4(prom);
+    const uint16_t crc_calc = crc_crc4(prom);
+    if (crc_read != crc_calc) {
+        DEV_PRINTF("%s PROM CRC mismatch on bus %u address 0x%02x read=%u calc=%u prom=%04x,%04x,%04x,%04x,%04x,%04x,%04x,%04x\n",
+                   ms56xx_name(_ms56xx_type),
+                   _dev->bus_num(),
+                   _dev->get_bus_address(),
+                   (unsigned)crc_read,
+                   (unsigned)crc_calc,
+                   (unsigned)prom[0],
+                   (unsigned)prom[1],
+                   (unsigned)prom[2],
+                   (unsigned)prom[3],
+                   (unsigned)prom[4],
+                   (unsigned)prom[5],
+                   (unsigned)prom[6],
+                   (unsigned)prom[7]);
+        _frontend._set_init_error("%s PROM CRC mismatch bus %u addr 0x%02x read=%u calc=%u",
+                                  ms56xx_name(_ms56xx_type),
+                                  _dev->bus_num(),
+                                  _dev->get_bus_address(),
+                                  (unsigned)crc_read,
+                                  (unsigned)crc_calc);
+        return false;
+    }
+
+    return true;
 }
 
 /*

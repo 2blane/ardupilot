@@ -73,6 +73,7 @@ private:
     void _calculate_5607();
     void _calculate_5637();
     void _calculate_5837();
+    bool _read_prom_5607(uint16_t prom[8]);
     bool _read_prom_5611(uint16_t prom[8]);
     bool _read_prom_5637(uint16_t prom[8]);
 

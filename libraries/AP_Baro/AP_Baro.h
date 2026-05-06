@@ -8,6 +8,7 @@
 #include <Filter/DerivativeFilter.h>
 #include <AP_MSP/msp.h>
 #include <AP_ExternalAHRS/AP_ExternalAHRS.h>
+#include <stdarg.h>
 
 // maximum number of sensor instances
 #ifndef BARO_MAX_INSTANCES
@@ -23,10 +24,12 @@
 #define BARO_DATA_CHANGE_TIMEOUT_MS     2000    // timeout in ms since last successful read that involved temperature of pressure changing
 
 class AP_Baro_Backend;
+class AP_Baro_MS56XX;
 
 class AP_Baro
 {
     friend class AP_Baro_Backend;
+    friend class AP_Baro_MS56XX;
     friend class AP_Baro_SITL; // for access to sensors[]
     friend class AP_Baro_DroneCAN; // for access to sensors[]
 
@@ -304,6 +307,8 @@ private:
     bool _have_i2c_driver(uint8_t bus_num, uint8_t address) const;
     bool _add_backend(AP_Baro_Backend *backend);
     void _probe_i2c_barometers(void);
+    void _set_init_error(const char *fmt, ...) FMT_PRINTF(2, 3);
+    void _clear_init_error(void);
     AP_Int8                            _filter_range;  // valid value range from mean value
     AP_Int32                           _baro_probe_ext;
 
@@ -312,6 +317,7 @@ private:
 #endif
 
     AP_Int16                           _options;
+    char                               _init_error[96] {};
 
     // semaphore for API access from threads
     HAL_Semaphore                      _rsem;
