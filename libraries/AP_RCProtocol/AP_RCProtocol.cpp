@@ -37,9 +37,58 @@
 #include <AP_Math/AP_Math.h>
 #include <RC_Channel/RC_Channel.h>
 
+#if HAL_GCS_ENABLED
+#include <GCS_MAVLink/GCS.h>
+#endif
+
+#include <AP_Logger/AP_Logger.h>
+
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 
 extern const AP_HAL::HAL& hal;
+
+static AP_RCProtocol::rcprotocol_t last_protocol_reported = AP_RCProtocol::NONE;
+static bool protocol_loss_reported;
+
+static void report_protocol_lock(const AP_RCProtocol::rcprotocol_t protocol, const bool from_bytes, const uint32_t baudrate)
+{
+    const char *name = AP_RCProtocol::protocol_name_from_protocol(protocol);
+    if (name == nullptr) {
+        return;
+    }
+    if (protocol == last_protocol_reported && !protocol_loss_reported) {
+        return;
+    }
+
+    if (from_bytes) {
+#if HAL_GCS_ENABLED
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCProto: lock %s UART@%lu", name, (unsigned long)baudrate);
+#endif
+        AP::logger().Write_MessageF("RCProto: lock %s UART@%lu", name, (unsigned long)baudrate);
+    } else {
+#if HAL_GCS_ENABLED
+        GCS_SEND_TEXT(MAV_SEVERITY_INFO, "RCProto: lock %s pulse", name);
+#endif
+        AP::logger().Write_MessageF("RCProto: lock %s pulse", name);
+    }
+
+    last_protocol_reported = protocol;
+    protocol_loss_reported = false;
+}
+
+static void report_protocol_loss(const AP_RCProtocol::rcprotocol_t protocol, const uint32_t silence_ms)
+{
+    const char *name = AP_RCProtocol::protocol_name_from_protocol(protocol);
+    if (name == nullptr || protocol_loss_reported) {
+        return;
+    }
+
+#if HAL_GCS_ENABLED
+    GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "RCProto: lost %s (%lums)", name, (unsigned long)silence_ms);
+#endif
+    AP::logger().Write_MessageF("RCProto: lost %s (%lums)", name, (unsigned long)silence_ms);
+    protocol_loss_reported = true;
+}
 
 void AP_RCProtocol::init()
 {
@@ -168,6 +217,7 @@ void AP_RCProtocol::process_pulse(uint32_t width_s0, uint32_t width_s1)
                 }
                 _last_input_ms = now;
                 _detected_with_bytes = false;
+                report_protocol_lock(_detected_protocol, false, 0);
                 break;
             }
         }
@@ -251,6 +301,7 @@ bool AP_RCProtocol::process_byte(uint8_t byte, uint32_t baudrate)
                 }
                 // stop decoding pulses to save CPU
                 hal.rcin->pulse_input_enable(false);
+                report_protocol_lock(_detected_protocol, true, baudrate);
                 return true;
             }
         }
@@ -363,6 +414,14 @@ void AP_RCProtocol::check_added_uart(void)
 void AP_RCProtocol::update()
 {
     check_added_uart();
+
+    if (_detected_protocol != AP_RCProtocol::NONE && _last_input_ms != 0) {
+        const uint32_t now = AP_HAL::millis();
+        const uint32_t silence_ms = now - _last_input_ms;
+        if (silence_ms > 1000) {
+            report_protocol_loss(_detected_protocol, silence_ms);
+        }
+    }
 }
 
 bool AP_RCProtocol::new_input()
@@ -384,6 +443,7 @@ bool AP_RCProtocol::new_input()
             backend[AP_RCProtocol::DRONECAN]->new_input()) {
             _detected_protocol = AP_RCProtocol::DRONECAN;
             _last_input_ms = now;
+            report_protocol_lock(_detected_protocol, false, 0);
         }
     } else if (_detected_protocol == AP_RCProtocol::DRONECAN) {
         _new_input = backend[AP_RCProtocol::DRONECAN]->new_input();
