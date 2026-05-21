@@ -331,7 +331,6 @@ private:
     void process_link_stats_tx_frame(const void* data);
     // crsf v3 decoding
     void decode_variable_bit_channels(const uint8_t* data, uint8_t frame_length, uint8_t nchannels, uint16_t *values);
-    void report_rx_debug_stats();
 
     void write_frame(Frame* frame);
     void start_uart();
@@ -347,12 +346,6 @@ private:
     bool telem_available;
     uint32_t _new_baud_rate;
     bool _crsf_v3_active;
-
-    // 1Hz debugging counters for GCS Info View (STATUSTEXT)
-    uint32_t _dbg_rx_bytes;
-    uint32_t _dbg_packets_ok;
-    uint32_t _dbg_packets_bad;
-    uint32_t _dbg_last_report_ms;
 
     bool _use_lq_for_rssi;
     int16_t derive_scaled_lq_value(uint8_t uplink_lq);

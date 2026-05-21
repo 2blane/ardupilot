@@ -29,9 +29,6 @@
 #include <AP_Vehicle/AP_Vehicle_Type.h>
 #include <AP_RCTelemetry/AP_CRSF_Telem.h>
 #include <AP_SerialManager/AP_SerialManager.h>
-#if HAL_GCS_ENABLED
-#include <GCS_MAVLink/GCS.h>
-#endif
 
 #define CRSF_SUBSET_RC_STARTING_CHANNEL_BITS        5
 #define CRSF_SUBSET_RC_STARTING_CHANNEL_MASK        0x1F
@@ -228,8 +225,6 @@ void AP_RCProtocol_CRSF::process_byte(uint8_t byte, uint32_t baudrate)
 // process a byte provided by a uart
 void AP_RCProtocol_CRSF::_process_byte(uint8_t byte)
 {
-    _dbg_rx_bytes++;
-
     //debug("process_byte(0x%x)", byte);
     const uint32_t now = AP_HAL::micros();
 
@@ -293,12 +288,10 @@ bool AP_RCProtocol_CRSF::check_frame(uint32_t timestamp_us)
         //debug("check_frame(0x%x, 0x%x)", _frame.device_address, _frame.length);
 
         if (crc != _frame.payload[_frame.length - 2]) {
-            _dbg_packets_bad++;
             return false;
         }
 
         log_data(AP_RCProtocol::CRSF, timestamp_us, (const uint8_t*)&_frame, _frame.length + CRSF_HEADER_LEN);
-        _dbg_packets_ok++;
 
         // decode here
         if (decode_crsf_packet()) {
@@ -384,33 +377,6 @@ void AP_RCProtocol_CRSF::update(void)
     //Check if LQ is to be reported in place of RSSI
     _use_lq_for_rssi = rc().option_is_enabled(RC_Channels::Option::USE_CRSF_LQ_AS_RSSI);
 #endif
-
-    report_rx_debug_stats();
-}
-
-void AP_RCProtocol_CRSF::report_rx_debug_stats()
-{
-    const uint32_t now = AP_HAL::millis();
-    if (_dbg_last_report_ms == 0) {
-        _dbg_last_report_ms = now;
-        return;
-    }
-    if (now - _dbg_last_report_ms < 1000U) {
-        return;
-    }
-
-#if HAL_GCS_ENABLED
-    GCS_SEND_TEXT(MAV_SEVERITY_INFO,
-                  "RCRx: bytes=%lu ok=%lu fail=%lu",
-                  (unsigned long)_dbg_rx_bytes,
-                  (unsigned long)_dbg_packets_ok,
-                  (unsigned long)_dbg_packets_bad);
-#endif
-
-    _dbg_rx_bytes = 0;
-    _dbg_packets_ok = 0;
-    _dbg_packets_bad = 0;
-    _dbg_last_report_ms = now;
 }
 
 // write out a frame of any type
