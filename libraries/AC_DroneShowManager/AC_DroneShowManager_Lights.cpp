@@ -1,12 +1,18 @@
 #include "AC_DroneShowManager.h"
 
+#include <string.h>
+
 #include <AP_GPS/AP_GPS.h>
+#include <AP_HAL/AP_HAL.h>
 #include <AP_Notify/AP_Notify.h>
+#include <RC_Channel/RC_Channel.h>
 #include <GCS_MAVLink/GCS.h>
 
 #include <skybrush/skybrush.h>
 
 #include "DroneShowLEDFactory.h"
+
+extern const AP_HAL::HAL &hal;
 
 // Group mask indicating all groups
 #define ALL_GROUPS 0
@@ -35,6 +41,142 @@ namespace Colors {
 static float get_modulation_factor_for_light_effect(
     uint32_t timestamp, LightEffectType effect, uint16_t period_msec, uint16_t phase_msec
 );
+
+static uint16_t map_pwm_to_range(uint16_t pwm, uint16_t in_min, uint16_t in_max, uint16_t out_max)
+{
+    const uint16_t clamped = constrain_uint16(pwm, in_min, in_max);
+    const uint32_t in_span = uint32_t(in_max) - uint32_t(in_min);
+    if (in_span == 0) {
+        return 0;
+    }
+    return uint16_t((uint32_t(clamped - in_min) * out_max) / in_span);
+}
+
+static sb_rgb_color_t hsv_to_rgb(float hue_deg, float saturation, float value)
+{
+    hue_deg = wrap_360(hue_deg);
+    saturation = constrain_float(saturation, 0.0f, 1.0f);
+    value = constrain_float(value, 0.0f, 1.0f);
+
+    const float chroma = value * saturation;
+    const float h_prime = hue_deg / 60.0f;
+    const float x = chroma * (1.0f - fabsf(fmodf(h_prime, 2.0f) - 1.0f));
+
+    float r1 = 0.0f;
+    float g1 = 0.0f;
+    float b1 = 0.0f;
+
+    if (h_prime < 1.0f) {
+        r1 = chroma;
+        g1 = x;
+    } else if (h_prime < 2.0f) {
+        r1 = x;
+        g1 = chroma;
+    } else if (h_prime < 3.0f) {
+        g1 = chroma;
+        b1 = x;
+    } else if (h_prime < 4.0f) {
+        g1 = x;
+        b1 = chroma;
+    } else if (h_prime < 5.0f) {
+        r1 = x;
+        b1 = chroma;
+    } else {
+        r1 = chroma;
+        b1 = x;
+    }
+
+    const float m = value - chroma;
+    sb_rgb_color_t color;
+    color.red = uint8_t(constrain_float((r1 + m) * 255.0f, 0.0f, 255.0f));
+    color.green = uint8_t(constrain_float((g1 + m) * 255.0f, 0.0f, 255.0f));
+    color.blue = uint8_t(constrain_float((b1 + m) * 255.0f, 0.0f, 255.0f));
+    return color;
+}
+
+bool AC_DroneShowManager::_is_elrs_connected() const
+{
+    const char *protocol = hal.rcin->protocol();
+    if (protocol == nullptr) {
+        return false;
+    }
+
+    // ELRS is carried over CRSF. Accept both strings to support all backends.
+    const bool is_elrs_or_crsf = strncmp(protocol, "ELRS", 4) == 0 || strncmp(protocol, "CRSF", 4) == 0;
+    if (!is_elrs_or_crsf) {
+        return false;
+    }
+
+    const int16_t link_quality = RC_Channels::get_receiver_link_quality();
+    if (link_quality >= 0) {
+        return link_quality > 0;
+    }
+
+    const int16_t rssi = RC_Channels::get_receiver_rssi();
+    return rssi > 0;
+}
+
+bool AC_DroneShowManager::_apply_elrs_led_override(sb_rgb_color_t& color, bool& enhance_brightness)
+{
+    if (!AP_Notify::flags.armed) {
+        return false;
+    }
+
+    if (!_is_elrs_connected()) {
+        return false;
+    }
+
+    static constexpr uint8_t CH7_INDEX = 6;
+    static constexpr uint8_t CH10_INDEX = 9;
+
+    static constexpr uint16_t RC_MIN = 999;
+    static constexpr uint16_t RC_MID = 1507;
+    static constexpr uint16_t RC_MAX = 2000;
+
+    static constexpr uint16_t CH7_LOW_MAX = (RC_MIN + RC_MID) / 2;
+    static constexpr uint16_t CH7_HIGH_MIN = ((RC_MID + RC_MAX) / 2) + 1;
+
+    const uint16_t ch7 = RC_Channels::get_radio_in(CH7_INDEX);
+    if (ch7 == 0) {
+        return false;
+    }
+
+    const uint16_t ch10 = RC_Channels::get_radio_in(CH10_INDEX);
+    const bool ch10_valid = (ch10 >= RC_MIN && ch10 <= RC_MAX);
+
+    enum class ELRSLedMode {
+        LOW,
+        MIDDLE,
+        HIGH,
+    };
+
+    ELRSLedMode mode = ELRSLedMode::MIDDLE;
+    if (ch7 <= CH7_LOW_MAX) {
+        mode = ELRSLedMode::LOW;
+    } else if (ch7 >= CH7_HIGH_MIN) {
+        mode = ELRSLedMode::HIGH;
+    }
+
+    if (mode == ELRSLedMode::HIGH && ch10_valid) {
+        _elrs_led_brightness_raw = map_pwm_to_range(ch10, RC_MIN, RC_MAX, 2000);
+    } else if (mode == ELRSLedMode::MIDDLE && ch10_valid) {
+        _elrs_led_hue_deg = map_pwm_to_range(ch10, RC_MIN, RC_MAX, 359);
+    }
+
+    const float value = constrain_float(_elrs_led_brightness_raw / 2000.0f, 0.0f, 1.0f);
+
+    if (mode == ELRSLedMode::LOW) {
+        const uint8_t white = uint8_t(255.0f * value);
+        color.red = white;
+        color.green = white;
+        color.blue = white;
+    } else {
+        color = hsv_to_rgb(_elrs_led_hue_deg, 1.0f, value);
+    }
+
+    enhance_brightness = false;
+    return true;
+}
 
 sb_rgb_color_t AC_DroneShowManager::get_desired_color_of_rgb_light() {
     float elapsed_time = get_elapsed_time_since_start_sec();
@@ -465,6 +607,13 @@ void AC_DroneShowManager::_update_lights()
             // Show a green dim light to indicate that we are ready.
             color = Colors::GREEN_DIM;
         }
+    }
+
+    if (_apply_elrs_led_override(color, enhance_brightness)) {
+        // RC override has the final say while ELRS link is active.
+        pulse = 0.0f;
+        pattern = 0b11111111;
+        light_signal_affected_by_brightness_setting = false;
     }
 
     if (pulse > 0) {

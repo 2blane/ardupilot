@@ -767,6 +767,10 @@ private:
     // Last RGB color that was sent to the RGB led
     sb_rgb_color_t _last_rgb_led_color;
 
+    // Persistent ELRS LED override state controlled from RC channels.
+    uint16_t _elrs_led_brightness_raw = 2000;
+    uint16_t _elrs_led_hue_deg = 0;
+
     // Last guided mode command that was sent
     GuidedModeCommand _last_setpoint;
 
@@ -897,6 +901,12 @@ private:
     // Updates the state of the LED light on the drone. This has to be called
     // regularly at 25 Hz
     void _update_lights();
+
+    // Returns whether an active ELRS link is currently connected.
+    bool _is_elrs_connected() const;
+
+    // Applies ELRS LED override from RC channels. Returns true when applied.
+    bool _apply_elrs_led_override(sb_rgb_color_t& color, bool& enhance_brightness);
 
     // Checks for error conditions that we can detect on the drone such as not
     // being in the designated start position before takeoff. This has to be
