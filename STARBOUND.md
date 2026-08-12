@@ -30,6 +30,15 @@ You might need to run STM32_Programmer_CLI -l to get the USB number.
 STM32_Programmer_CLI -c port=USB1 -e all -d build/Starbound/bin/arducopter_with_bl.hex -v
 ```
 
+5) If STM32 Programmer is giving read permission errors then do this instead:
+```
+STM32_Programmer_CLI -c port=USB1 -d build/Starbound/bin/arducopter_with_bl.hex
+```
+Then you can check it with the following command to see if you get data.
+```
+STM32_Programmer_CLI -c port=USB1 -r8 0x08000000 64
+```
+
 ### Installing with stm32flash (alternative to STM32_Programmer_CLI)
 You might need to run the following to get the USB
 ```
