@@ -32,6 +32,7 @@ void DroneShowNotificationBackend::update()
     DroneShowNotificationBackend::events.compass_cal_saved |= AP_Notify::events.compass_cal_saved;
     DroneShowNotificationBackend::events.compass_cal_failed |= AP_Notify::events.compass_cal_failed;
     DroneShowNotificationBackend::events.compass_cal_canceled |= AP_Notify::events.compass_cal_canceled;
+    DroneShowNotificationBackend::events.accel_cal_sample |= AP_Notify::events.accel_cal_sample;
 }
 
 void DroneShowNotificationBackend::clear_events()

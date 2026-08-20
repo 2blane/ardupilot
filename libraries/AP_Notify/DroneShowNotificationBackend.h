@@ -35,6 +35,7 @@ public:
         uint8_t compass_cal_saved      : 1;    // 1 when compass calibration was just saved
         uint8_t compass_cal_failed     : 1;    // 1 when compass calibration has just failed
         uint8_t compass_cal_canceled   : 1;    // 1 when compass calibration was just canceled
+        uint8_t accel_cal_sample       : 1;    // 1 when an accelerometer calibration pose was captured
     };
 
     /* Stores a copy of the events that we have observed from the notification

@@ -131,6 +131,7 @@ public:
         bool autopilot_mode;      // true if vehicle is in an autopilot flight mode (only used by OreoLEDs)
         bool firmware_update;     // true just before vehicle firmware is updated
         bool compass_cal_running; // true if a compass calibration is running
+        bool accel_cal_running;   // true if an accelerometer calibration is running
         bool leak_detected;       // true if leak detected
         bool gps_fusion;          // true if the GPS is in use by EKF, usable for flight
         bool gps_glitching;       // true f the GPS is believed to be glitching is affecting navigation accuracy
@@ -166,6 +167,7 @@ public:
         uint32_t initiated_temp_cal     : 1;    // 1 when temperature calibration starts
         uint32_t temp_cal_saved         : 1;    // 1 when temperature calibration was just saved
         uint32_t temp_cal_failed        : 1;    // 1 when temperature calibration has just failed
+        uint32_t accel_cal_sample       : 1;    // 1 when an accelerometer calibration pose was captured
     };
 
     // The notify flags and values are static to allow direct class access

@@ -730,6 +730,10 @@ private:
         bool sync_to_gps;               //< Whether to sync the light signal to GPS time
     } _light_signal;
 
+    // End of the short white pulse that confirms an accepted accelerometer
+    // calibration pose. The lights remain off between accepted poses.
+    uint32_t _accel_cal_flash_until_msec = 0;
+
     // Current execution stage of the drone show mode. This is pushed here from
     // the drone show mode when the stage changes in the mode.
     DroneShowModeStage _stage_in_drone_show_mode;

@@ -17,6 +17,7 @@
 
 #include <stdarg.h>
 #include <AP_HAL/AP_HAL.h>
+#include <AP_Notify/AP_Notify.h>
 #include <GCS_MAVLink/GCS.h>
 
 #define AP_ACCELCAL_POSITION_REQUEST_INTERVAL_MS 1000
@@ -42,7 +43,13 @@ void AP_AccelCal::update()
     }
 
     if (_started) {
+        const accel_cal_status_t previous_status = _status;
         update_status();
+        if (previous_status == ACCEL_CAL_COLLECTING_SAMPLE &&
+            (_status == ACCEL_CAL_WAITING_FOR_ORIENTATION ||
+             _status == ACCEL_CAL_SUCCESS)) {
+            AP_Notify::events.accel_cal_sample = 1;
+        }
 
         uint8_t num_active_calibrators = 0;
         for(uint8_t i=0; get_calibrator(i) != nullptr; i++) {
@@ -199,6 +206,7 @@ void AP_AccelCal::start(GCS_MAVLINK *gcs)
     }
 
     _started = true;
+    AP_Notify::flags.accel_cal_running = true;
     _saving = false;
     _gcs = gcs;
     _use_gcs_snoop = true;
@@ -263,6 +271,7 @@ void AP_AccelCal::clear()
     _step = 0;
     _started = false;
     _saving = false;
+    AP_Notify::flags.accel_cal_running = false;
 
     update_status();
 }

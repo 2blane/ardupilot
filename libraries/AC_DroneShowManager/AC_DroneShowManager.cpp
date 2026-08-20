@@ -1075,10 +1075,36 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
         packet[11 + i] = count < 0 ? 0 : ((count > 254 ? 254 : count) + 1);
     }
 
+    // Receiver protocol extension for the Starbound screen. Values are kept
+    // compact so older Skybrush clients can ignore this trailing byte.
+    const char *rc_protocol = hal.rcin->protocol();
+    if (rc_protocol != nullptr) {
+        if (strncmp(rc_protocol, "CRSF", 4) == 0 ||
+            strncmp(rc_protocol, "ELRS", 4) == 0) {
+            packet[14] = 1;
+        } else if (strstr(rc_protocol, "SBUS") != nullptr) {
+            packet[14] = 2;
+        } else if (strncmp(rc_protocol, "DSM", 3) == 0) {
+            packet[14] = 3;
+        } else if (strncmp(rc_protocol, "SRXL", 4) == 0) {
+            packet[14] = 4;
+        } else if (strncmp(rc_protocol, "IBUS", 4) == 0) {
+            packet[14] = 5;
+        } else if (strncmp(rc_protocol, "FPORT", 5) == 0) {
+            packet[14] = 6;
+        } else if (strncmp(rc_protocol, "GHST", 4) == 0) {
+            packet[14] = 7;
+        } else if (strncmp(rc_protocol, "DroneCAN", 8) == 0) {
+            packet[14] = 8;
+        } else if (rc_protocol[0] != '\0') {
+            packet[14] = 255;
+        }
+    }
+
     mavlink_msg_data16_send(
         chan,
         0x5b,   // Skybrush status packet type marker
-        14,     // effective packet length
+        15,     // effective packet length, including receiver protocol
         packet
     );
 }
@@ -1272,6 +1298,10 @@ void AC_DroneShowManager::_check_changes_in_parameters()
 void AC_DroneShowManager::_check_events()
 {
     DroneShowNotificationBackend* backend = DroneShowNotificationBackend::get_singleton();
+
+    if (DroneShowNotificationBackend::events.accel_cal_sample) {
+        _accel_cal_flash_until_msec = AP_HAL::millis() + 100;
+    }
 
     if (DroneShowNotificationBackend::events.compass_cal_failed) {
         _flash_leds_after_failure();

@@ -420,6 +420,15 @@ void AC_DroneShowManager::_update_lights()
         if (brightness < 1) {
             brightness = 1;
         }
+    } else if ((int32_t)(_accel_cal_flash_until_msec - AP_HAL::millis()) > 0) {
+        // Confirm an accepted accelerometer pose with one short white pulse.
+        color = Colors::WHITE;
+        light_signal_affected_by_brightness_setting = false;
+    } else if (AP_Notify::flags.accel_cal_running) {
+        // Stay dark while waiting for the next pose. This suppresses the
+        // normal yellow pre-arm warning pattern during accelerometer cal.
+        color = Colors::BLACK;
+        light_signal_affected_by_brightness_setting = false;
     } else if (_light_signal.started_at_msec) {
         // If the user requested a light signal, it trumps everything except
         // the compass calibration.
@@ -822,4 +831,3 @@ static float get_modulation_factor_for_light_effect(
             return 0.0;
     }
 }
-
