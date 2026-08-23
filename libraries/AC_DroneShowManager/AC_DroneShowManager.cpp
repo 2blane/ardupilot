@@ -967,9 +967,22 @@ void AC_DroneShowManager::handle_elrs_radio_status(const mavlink_message_t& msg,
         return;
     }
 
-    _elrs_broadcast_mode = status.remnoise == STARBOUND_RADIO_MODE_BROADCAST;
-    _elrs_link_quality = MIN(100U,
-        ((uint16_t)status.rssi * 100U + 127U) / 255U);
+    const bool broadcast_mode =
+        status.remnoise == STARBOUND_RADIO_MODE_BROADCAST;
+    if (broadcast_mode != _elrs_broadcast_mode) {
+        _elrs_broadcast_rssi_known = false;
+    }
+    _elrs_broadcast_mode = broadcast_mode;
+    if (_elrs_broadcast_mode) {
+        _elrs_link_quality = 0;
+        if (status.rssi > 0 && status.rssi <= 127) {
+            _elrs_broadcast_rssi_dbm = -int8_t(status.rssi);
+            _elrs_broadcast_rssi_known = true;
+        }
+    } else {
+        _elrs_link_quality = MIN(100U,
+            ((uint16_t)status.rssi * 100U + 127U) / 255U);
+    }
     _elrs_radio_status_ms = AP_HAL::millis();
     if (_elrs_broadcast_mode) {
         _elrs_pilot_rc_seen = false;
@@ -1017,6 +1030,37 @@ void AC_DroneShowManager::handle_elrs_rc_override(
         packet.chan13_raw, packet.chan14_raw, packet.chan15_raw,
         packet.chan16_raw
     };
+
+    // WiFi and broadcast LED_CONTROL effects can remain active for up to a
+    // minute. A deliberate change to the RadioMaster LED switch or dial means
+    // the pilot is taking lighting control back, so release that external
+    // effect immediately. Internal calibration/failure indications stay in
+    // control until they finish.
+    const uint16_t led_mode_pwm = override_data[6];
+    const uint16_t led_dial_pwm = override_data[9];
+    const bool led_channels_valid =
+        led_mode_pwm >= 800 && led_mode_pwm <= 2200 &&
+        led_dial_pwm >= 800 && led_dial_pwm <= 2200;
+    if (led_channels_valid) {
+        if (_elrs_led_channels_initialized) {
+            static constexpr uint16_t LED_CHANNEL_CHANGE_DEADBAND = 4;
+            const bool mode_changed =
+                abs(int32_t(led_mode_pwm) - int32_t(_elrs_led_last_ch7)) >
+                LED_CHANNEL_CHANGE_DEADBAND;
+            const bool dial_changed =
+                abs(int32_t(led_dial_pwm) - int32_t(_elrs_led_last_ch10)) >
+                LED_CHANNEL_CHANGE_DEADBAND;
+            if ((mode_changed || dial_changed) &&
+                _light_signal.priority != LightEffectPriority_Internal) {
+                _light_signal.started_at_msec = 0;
+                _light_signal.priority = LightEffectPriority_None;
+            }
+        }
+        _elrs_led_last_ch7 = led_mode_pwm;
+        _elrs_led_last_ch10 = led_dial_pwm;
+        _elrs_led_channels_initialized = true;
+    }
+
     for (uint8_t i = 0; i < 8; i++) {
         if (override_data[i] != UINT16_MAX) {
             RC_Channels::set_override(i, override_data[i], now_ms);
@@ -1306,6 +1350,20 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
         16,     // includes receiver protocol, mode, and link quality
         packet
     );
+
+    // Broadcast RSSI extension. The receiver reports RSSI as a positive dBm
+    // magnitude in RADIO_STATUS; retain it across sparse RF traffic and send
+    // the signed value separately from the mode/link-quality extension.
+    if (elrs_status_fresh && _elrs_broadcast_mode) {
+        packet[0] = uint8_t(_elrs_broadcast_rssi_dbm);
+        packet[1] = _elrs_broadcast_rssi_known ? 1 : 0;
+        mavlink_msg_data16_send(
+            chan,
+            0x5c,   // Starbound ELRS Broadcast RSSI marker
+            2,
+            packet
+        );
+    }
 }
 
 void AC_DroneShowManager::handle_rc_start_switch()

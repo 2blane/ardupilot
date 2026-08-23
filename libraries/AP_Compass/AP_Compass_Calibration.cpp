@@ -356,6 +356,30 @@ bool Compass::is_calibrating() const
     return false;
 }
 
+#if COMPASS_CAL_ENABLED
+bool Compass::calibration_ready_to_save() const
+{
+    bool found_unsaved_calibration = false;
+
+    for (Priority i(0); i<COMPASS_MAX_INSTANCES; i++) {
+        if (_calibrator[i] == nullptr || !use_for_yaw(uint8_t(i))) {
+            continue;
+        }
+
+        const CompassCalibrator::Status status = _calibrator[i]->get_state().status;
+        if (status == CompassCalibrator::Status::NOT_STARTED) {
+            continue;
+        }
+        if (status != CompassCalibrator::Status::SUCCESS) {
+            return false;
+        }
+        found_unsaved_calibration |= !_cal_saved[i];
+    }
+
+    return found_unsaved_calibration;
+}
+#endif
+
 uint8_t Compass::_get_cal_mask()
 {
     uint8_t cal_mask = 0;

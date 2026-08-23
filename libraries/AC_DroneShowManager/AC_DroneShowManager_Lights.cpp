@@ -5,6 +5,7 @@
 #include <AP_GPS/AP_GPS.h>
 #include <AP_HAL/AP_HAL.h>
 #include <AP_Notify/AP_Notify.h>
+#include <AP_Compass/AP_Compass.h>
 #include <RC_Channel/RC_Channel.h>
 #include <GCS_MAVLink/GCS.h>
 
@@ -96,6 +97,18 @@ static sb_rgb_color_t hsv_to_rgb(float hue_deg, float saturation, float value)
 
 bool AC_DroneShowManager::_is_elrs_connected() const
 {
+    // Starbound Pilot mode carries handset channels over the dedicated ELRS
+    // MAVLink UART. Treat a recently accepted override as the live ELRS link;
+    // hal.rcin->protocol() only identifies native CRSF input and therefore
+    // cannot identify this transport.
+    static constexpr uint32_t PILOT_OVERRIDE_TIMEOUT_MS = 3000;
+    const uint32_t now_ms = AP_HAL::millis();
+    if (!_elrs_broadcast_mode &&
+        _elrs_rc_override_accepted_ms != 0 &&
+        (now_ms - _elrs_rc_override_accepted_ms) <= PILOT_OVERRIDE_TIMEOUT_MS) {
+        return true;
+    }
+
     const char *protocol = hal.rcin->protocol();
     if (protocol == nullptr) {
         return false;
@@ -214,7 +227,7 @@ void AC_DroneShowManager::_flash_leds_after_failure()
 
 void AC_DroneShowManager::_flash_leds_after_success()
 {
-    _flash_leds_with_color(0, 255, 0, /* count = */ 3, LightEffectPriority_Internal);
+    _flash_leds_with_color(255, 255, 255, /* count = */ 3, LightEffectPriority_Internal);
 }
 
 void AC_DroneShowManager::_flash_leds_to_attract_attention(LightEffectPriority priority)
@@ -283,18 +296,18 @@ bool AC_DroneShowManager::_handle_led_control_message(const mavlink_message_t& m
         unsigned(packet.custom_bytes[2]));
 #endif
     
-    // Individual messages take precedence over broadcast messages so we need to
-    // know whether this message is broadcast
+    // Track where the request was addressed, but let the newest external
+    // command replace any earlier external command. This allows a pilot to
+    // take lighting control back over ELRS immediately after a WiFi command,
+    // and vice versa. Internal calibration/failure signals remain protected.
     priority = (packet.target_system == 0)
         ? LightEffectPriority_Broadcast
         : LightEffectPriority_Individual;
-    if (priority < _light_signal.priority) {
-        // Previous light signal has a higher priority, but maybe it ended already?
+    if (_light_signal.priority == LightEffectPriority_Internal) {
         if (_light_signal.started_at_msec + _light_signal.duration_msec < AP_HAL::millis()) {
             _light_signal.priority = LightEffectPriority_None;
         } else {
-            // Handled but ignored by us because a higher priority effect is still
-            // playing.
+            // Do not interrupt an active calibration or failure indication.
             return true;
         }
     }
@@ -416,6 +429,14 @@ void AC_DroneShowManager::_update_lights()
     (mode == MODE_DRONE_SHOW && _stage_in_drone_show_mode == DroneShow_RTL) \
 )
 
+    // Light blue means every participating compass has a successful result
+    // and the drone no longer needs to be moved.
+#if COMPASS_CAL_ENABLED
+    if (AP::compass().calibration_ready_to_save()) {
+        color = Colors::LIGHT_BLUE;
+        light_signal_affected_by_brightness_setting = false;
+    } else
+#endif
     // During compass calibration, the light should be purple no matter what.
     // Compass calibration is always requested by the user so he can rightly
     // expect any light signal that was previously set up from the GCS to be

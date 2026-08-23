@@ -186,6 +186,9 @@ public:
 
     bool compass_cal_requires_reboot() const { return _cal_requires_reboot; }
     bool is_calibrating() const;
+#if COMPASS_CAL_ENABLED
+    bool calibration_ready_to_save() const;
+#endif
 
     // indicate which bit in LOG_BITMASK indicates we should log compass readings
     void set_log_bit(uint32_t log_bit) { _log_bit = log_bit; }

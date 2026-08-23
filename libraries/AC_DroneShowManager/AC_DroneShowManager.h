@@ -783,6 +783,9 @@ private:
     // Persistent ELRS LED override state controlled from RC channels.
     uint16_t _elrs_led_brightness_raw = 2000;
     uint16_t _elrs_led_hue_deg = 0;
+    uint16_t _elrs_led_last_ch7 = 0;
+    uint16_t _elrs_led_last_ch10 = 0;
+    bool _elrs_led_channels_initialized = false;
 
     // Last guided mode command that was sent
     GuidedModeCommand _last_setpoint;
@@ -877,7 +880,9 @@ private:
     uint32_t _elrs_rc_override_ms = 0;
     uint32_t _elrs_rc_override_accepted_ms = 0;
     uint8_t _elrs_link_quality = 0;
-    bool _elrs_broadcast_mode = false;
+    int8_t _elrs_broadcast_rssi_dbm = 0;
+    bool _elrs_broadcast_rssi_known = false;
+    bool _elrs_broadcast_mode = true;
     bool _elrs_pilot_rc_seen = false;
     bool _elrs_pilot_override_sent = false;
 
