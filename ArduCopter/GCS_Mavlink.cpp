@@ -635,6 +635,14 @@ void GCS_MAVLINK_Copter::packetReceived(const mavlink_status_t &status,
                                         const mavlink_message_t &msg)
 {
     // we handle these messages here to avoid them being blocked by mavlink routing code
+#if MODE_DRONE_SHOW_ENABLED == ENABLED
+    if (msg.msgid == MAVLINK_MSG_ID_RADIO_STATUS) {
+        copter.g2.drone_show_manager.handle_elrs_radio_status(msg, chan);
+    } else if (msg.msgid == MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE) {
+        copter.g2.drone_show_manager.handle_elrs_rc_override(
+            msg, chan, msg.sysid == sysid_my_gcs());
+    }
+#endif
 #if HAL_ADSB_ENABLED
     if (copter.g2.dev_options.get() & DevOptionADSBMAVLink) {
         // optional handling of GLOBAL_POSITION_INT as a MAVLink based avoidance source
@@ -862,7 +870,7 @@ MAV_RESULT GCS_MAVLINK_Copter::handle_command_int_packet(const mavlink_command_i
 #if MODE_DRONE_SHOW_ENABLED == ENABLED
     case MAV_CMD_USER_1:
     case MAV_CMD_USER_2:
-        return copter.g2.drone_show_manager.handle_command_int_packet(packet);
+        return copter.g2.drone_show_manager.handle_command_int_packet(packet, msg);
 #endif
 
     default:
@@ -1699,5 +1707,13 @@ void GCS_MAVLINK_Copter::initialise_custom_message_intervals()
     set_message_interval(MAVLINK_MSG_ID_GLOBAL_POSITION_INT, 500000);
     set_message_interval(MAVLINK_MSG_ID_SYS_STATUS, 1000000);
     set_message_interval(MAVLINK_MSG_ID_GPS_RAW_INT, 1000000);
+    // The Starbound ELRS receiver keeps its flight-controller UART in MAVLink
+    // mode and converts these messages to standard CRSF handset telemetry when
+    // a normal pilot transmitter is connected.
+    set_message_interval(MAVLINK_MSG_ID_BATTERY_STATUS, 1000000);
+    set_message_interval(MAVLINK_MSG_ID_ATTITUDE, 500000);
+    set_message_interval(MAVLINK_MSG_ID_VFR_HUD, 500000);
+    set_message_interval(MAVLINK_MSG_ID_HOME_POSITION, 5000000);
+    set_message_interval(MAVLINK_MSG_ID_RC_CHANNELS, 200000);
 #endif
 }

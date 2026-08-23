@@ -390,10 +390,19 @@ public:
     float get_velocity_feedforward_gain() const { return _params.velocity_feedforward_gain; }
 
     // Handles a MAVLink user command forwarded to the drone show manager by the central MAVLink handler
-    MAV_RESULT handle_command_int_packet(const mavlink_command_int_t &packet);
+    MAV_RESULT handle_command_int_packet(const mavlink_command_int_t &packet, const mavlink_message_t &msg);
 
     // Handles a MAVLink message forwarded to the drone show manager by the central MAVLink handler
     bool handle_message(const mavlink_message_t& msg) WARN_IF_UNUSED;
+
+    // Caches Starbound ELRS mode and link quality from its dedicated MAVLink port.
+    void handle_elrs_radio_status(const mavlink_message_t& msg,
+                                  mavlink_channel_t source_chan);
+
+    // Tracks Pilot RC override messages arriving on the dedicated ELRS port.
+    void handle_elrs_rc_override(const mavlink_message_t& msg,
+                                 mavlink_channel_t source_chan,
+                                 bool sender_accepted);
 
     // Asks the drone show manager to schedule a start as soon as possible if
     // the show is not running yet, assuming that the signal was sent from the
@@ -863,6 +872,14 @@ private:
 
     // Handles a MAVLink LED_CONTROL message from the ground station.
     bool _handle_led_control_message(const mavlink_message_t& msg);
+
+    uint32_t _elrs_radio_status_ms = 0;
+    uint32_t _elrs_rc_override_ms = 0;
+    uint32_t _elrs_rc_override_accepted_ms = 0;
+    uint8_t _elrs_link_quality = 0;
+    bool _elrs_broadcast_mode = false;
+    bool _elrs_pilot_rc_seen = false;
+    bool _elrs_pilot_override_sent = false;
 
     // Callback that is called when entering the "landed" stage
     void _handle_switch_to_landed_state();

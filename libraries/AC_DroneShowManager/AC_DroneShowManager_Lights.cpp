@@ -273,6 +273,15 @@ bool AC_DroneShowManager::_handle_led_control_message(const mavlink_message_t& m
         // Not handled by us
         return false;
     }
+
+#ifdef HAL_MAVLINK_COMM_NUM_BUFFERS
+    gcs().send_text(
+        MAV_SEVERITY_INFO,
+        "LED_CONTROL RX sys=%u len=%u rgb=%u,%u,%u",
+        unsigned(packet.target_system), unsigned(packet.custom_len),
+        unsigned(packet.custom_bytes[0]), unsigned(packet.custom_bytes[1]),
+        unsigned(packet.custom_bytes[2]));
+#endif
     
     // Individual messages take precedence over broadcast messages so we need to
     // know whether this message is broadcast

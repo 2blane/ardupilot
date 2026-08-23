@@ -11,8 +11,10 @@
 #include <AP_Notify/AP_Notify.h>
 #include <AP_Notify/DroneShowNotificationBackend.h>
 #include <AP_Param/AP_Param.h>
+#include <RC_Channel/RC_Channel.h>
 
 #include "AC_DroneShowManager.h"
+#include "AC_DroneShowManager_Firmware.h"
 #include <AC_Fence/AC_Fence.h>
 
 #include <skybrush/skybrush.h>
@@ -21,6 +23,49 @@
 #include "DroneShowLEDFactory.h"
 
 extern const AP_HAL::HAL &hal;
+
+namespace {
+constexpr uint8_t STARBOUND_ELRS_SERIAL_INDEX = 6;
+constexpr float ELRS_MODE_CHANGE_MARKER = 8.0f;
+constexpr float ELRS_NORMAL_MODE = 0.0f;
+constexpr float ELRS_BROADCAST_RECEIVE_MODE = 2.0f;
+constexpr uint8_t STARBOUND_RADIO_MODE_PILOT = 0xB0;
+constexpr uint8_t STARBOUND_RADIO_MODE_BROADCAST = 0xB2;
+constexpr uint32_t ELRS_RADIO_STATUS_TIMEOUT_MS = 3000;
+
+bool send_elrs_mode_command(float mode)
+{
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    if (elrs_uart == nullptr) {
+        return false;
+    }
+
+    GCS_MAVLINK *elrs_link = nullptr;
+    for (uint8_t i = 0; i < gcs().num_gcs(); i++) {
+        GCS_MAVLINK *link = gcs().chan(i);
+        if (link != nullptr && link->get_uart() == elrs_uart) {
+            elrs_link = link;
+            break;
+        }
+    }
+    if (elrs_link == nullptr) {
+        return false;
+    }
+
+    const mavlink_channel_t chan = elrs_link->get_chan();
+    if (!HAVE_PAYLOAD_SPACE(chan, COMMAND_INT)) {
+        return false;
+    }
+
+    // Use the GCS channel sender so this frame shares the same MAVLink sequence
+    // and UART serialization as every other ArduPilot packet on the ELRS port.
+    mavlink_msg_command_int_send(
+        chan, 0, MAV_COMP_ID_UDP_BRIDGE, MAV_FRAME_GLOBAL,
+        MAV_CMD_USER_1, 0, 0, ELRS_MODE_CHANGE_MARKER, mode,
+        0.0f, 0.0f, 0, 0, 0.0f);
+    return true;
+}
+}
 
 namespace CustomPackets {
     static const uint8_t START_CONFIG = 1;
@@ -812,7 +857,7 @@ float AC_DroneShowManager::get_time_until_landing_sec() const
     return get_time_until_start_sec() + get_relative_landing_time_sec();
 }
 
-MAV_RESULT AC_DroneShowManager::handle_command_int_packet(const mavlink_command_int_t &packet)
+MAV_RESULT AC_DroneShowManager::handle_command_int_packet(const mavlink_command_int_t &packet, const mavlink_message_t &msg)
 {
     switch (packet.command) {
 
@@ -833,6 +878,36 @@ MAV_RESULT AC_DroneShowManager::handle_command_int_packet(const mavlink_command_
             } else {
                 return MAV_RESULT_FAILED;
             }
+        } else if (is_zero(packet.param1 - 2)) {
+            // Program an onboard ESP-family peripheral from /APM/UPDATE.
+            // param2: target, 1=wifi, 2=elrs, 3=screen
+            // param3: set to 1 to skip readback verification
+            if (AP::motors()->armed()) {
+                return MAV_RESULT_DENIED;
+            }
+            if (DroneShowFirmware::start(static_cast<DroneShowFirmware::Target>(uint8_t(packet.param2)),
+                                         is_equal(packet.param3, 1.0f),
+                                         msg.sysid,
+                                         msg.compid)) {
+                return MAV_RESULT_ACCEPTED;
+            }
+            return DroneShowFirmware::busy() ? MAV_RESULT_TEMPORARILY_REJECTED : MAV_RESULT_FAILED;
+        } else if (is_equal(packet.param1, ELRS_MODE_CHANGE_MARKER)) {
+            // Switch the ELRS coprocessor between normal and fleet broadcast RX.
+            if (AP::motors()->armed()) {
+                return MAV_RESULT_DENIED;
+            }
+            if (!is_equal(packet.param2, ELRS_NORMAL_MODE) &&
+                !is_equal(packet.param2, ELRS_BROADCAST_RECEIVE_MODE)) {
+                return MAV_RESULT_DENIED;
+            }
+            if (send_elrs_mode_command(packet.param2)) {
+                if (is_equal(packet.param2, ELRS_BROADCAST_RECEIVE_MODE)) {
+                    RC_Channels::clear_overrides();
+                }
+                return MAV_RESULT_ACCEPTED;
+            }
+            return MAV_RESULT_TEMPORARILY_REJECTED;
         }
 
         // Unsupported command code
@@ -870,6 +945,95 @@ MAV_RESULT AC_DroneShowManager::handle_command_int_packet(const mavlink_command_
         // Unsupported command code
         return MAV_RESULT_UNSUPPORTED;
     }
+}
+
+void AC_DroneShowManager::handle_elrs_radio_status(const mavlink_message_t& msg,
+                                                    mavlink_channel_t source_chan)
+{
+    if (msg.msgid != MAVLINK_MSG_ID_RADIO_STATUS) {
+        return;
+    }
+
+    GCS_MAVLINK *link = gcs().chan(source_chan);
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    if (link == nullptr || elrs_uart == nullptr || link->get_uart() != elrs_uart) {
+        return;
+    }
+
+    mavlink_radio_status_t status{};
+    mavlink_msg_radio_status_decode(&msg, &status);
+    if (status.remnoise != STARBOUND_RADIO_MODE_PILOT &&
+        status.remnoise != STARBOUND_RADIO_MODE_BROADCAST) {
+        return;
+    }
+
+    _elrs_broadcast_mode = status.remnoise == STARBOUND_RADIO_MODE_BROADCAST;
+    _elrs_link_quality = MIN(100U,
+        ((uint16_t)status.rssi * 100U + 127U) / 255U);
+    _elrs_radio_status_ms = AP_HAL::millis();
+    if (_elrs_broadcast_mode) {
+        _elrs_pilot_rc_seen = false;
+        _elrs_pilot_override_sent = false;
+        _elrs_rc_override_ms = 0;
+        _elrs_rc_override_accepted_ms = 0;
+    } else {
+        _elrs_pilot_rc_seen |= status.rxerrors != 0;
+        _elrs_pilot_override_sent |= status.fixed != 0;
+    }
+}
+
+void AC_DroneShowManager::handle_elrs_rc_override(
+    const mavlink_message_t& msg,
+    mavlink_channel_t source_chan,
+    bool sender_accepted)
+{
+    if (msg.msgid != MAVLINK_MSG_ID_RC_CHANNELS_OVERRIDE) {
+        return;
+    }
+
+    GCS_MAVLINK *link = gcs().chan(source_chan);
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    if (link == nullptr || elrs_uart == nullptr || link->get_uart() != elrs_uart) {
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    _elrs_rc_override_ms = now_ms;
+    if (!sender_accepted) {
+        return;
+    }
+
+    // This packet has already passed MAVLink framing and CRC validation and
+    // arrived on the dedicated ELRS UART. Apply it here so Pilot control does
+    // not depend on routing-table state; the normal GCS handler may apply the
+    // same values again later in the receive path.
+    mavlink_rc_channels_override_t packet{};
+    mavlink_msg_rc_channels_override_decode(&msg, &packet);
+    const uint16_t override_data[] = {
+        packet.chan1_raw, packet.chan2_raw, packet.chan3_raw,
+        packet.chan4_raw, packet.chan5_raw, packet.chan6_raw,
+        packet.chan7_raw, packet.chan8_raw, packet.chan9_raw,
+        packet.chan10_raw, packet.chan11_raw, packet.chan12_raw,
+        packet.chan13_raw, packet.chan14_raw, packet.chan15_raw,
+        packet.chan16_raw
+    };
+    for (uint8_t i = 0; i < 8; i++) {
+        if (override_data[i] != UINT16_MAX) {
+            RC_Channels::set_override(i, override_data[i], now_ms);
+        }
+    }
+    for (uint8_t i = 8; i < ARRAY_SIZE(override_data); i++) {
+        if (override_data[i] != 0 && override_data[i] != UINT16_MAX) {
+            const uint16_t value = override_data[i] == UINT16_MAX - 1
+                ? 0 : override_data[i];
+            RC_Channels::set_override(i, value, now_ms);
+        }
+    }
+    // RC_CHANNELS_OVERRIDE is the Pilot control heartbeat. Refresh this even
+    // when MAVLink routing forwards the packet elsewhere after our dedicated
+    // ELRS-port handler has already accepted and applied it locally.
+    gcs().sysid_myggcs_seen(now_ms);
+    _elrs_rc_override_accepted_ms = now_ms;
 }
 
 bool AC_DroneShowManager::handle_message(const mavlink_message_t& msg)
@@ -1075,10 +1239,15 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
         packet[11 + i] = count < 0 ? 0 : ((count > 254 ? 254 : count) + 1);
     }
 
+    const bool elrs_status_fresh = _elrs_radio_status_ms != 0 &&
+        (AP_HAL::millis() - _elrs_radio_status_ms) <= ELRS_RADIO_STATUS_TIMEOUT_MS;
+
     // Receiver protocol extension for the Starbound screen. Values are kept
-    // compact so older Skybrush clients can ignore this trailing byte.
+    // compact so older Skybrush clients can ignore these trailing bytes.
     const char *rc_protocol = hal.rcin->protocol();
-    if (rc_protocol != nullptr) {
+    if (elrs_status_fresh) {
+        packet[14] = 1;
+    } else if (rc_protocol != nullptr) {
         if (strncmp(rc_protocol, "CRSF", 4) == 0 ||
             strncmp(rc_protocol, "ELRS", 4) == 0) {
             packet[14] = 1;
@@ -1101,10 +1270,40 @@ void AC_DroneShowManager::send_drone_show_status(const mavlink_channel_t chan) c
         }
     }
 
+    if (elrs_status_fresh && !_elrs_broadcast_mode) {
+        const uint32_t now_ms = AP_HAL::millis();
+        if (_elrs_pilot_rc_seen) {
+            packet[14] |= 0x10;
+        }
+        if (_elrs_pilot_override_sent) {
+            packet[14] |= 0x20;
+        }
+        if (_elrs_rc_override_ms != 0 &&
+            (now_ms - _elrs_rc_override_ms) <= ELRS_RADIO_STATUS_TIMEOUT_MS) {
+            packet[14] |= 0x40;
+        }
+        if (_elrs_rc_override_accepted_ms != 0 &&
+            (now_ms - _elrs_rc_override_accepted_ms) <= ELRS_RADIO_STATUS_TIMEOUT_MS) {
+            packet[14] |= 0x80;
+        }
+    }
+
+    // Bit 7 marks this extension as valid, bit 6 is broadcast mode, and the
+    // lower six bits contain link quality scaled from 0-100 to 0-63. Keeping
+    // mode out of the LQ field prevents strong Pilot links from looking like
+    // Broadcast mode whenever link quality reaches 64 percent.
+    if (elrs_status_fresh) {
+        const uint8_t encoded_lq =
+            (MIN(_elrs_link_quality, 100U) * 63U + 50U) / 100U;
+        packet[15] = 0x80 |
+            (_elrs_broadcast_mode ? 0x40 : 0x00) |
+            encoded_lq;
+    }
+
     mavlink_msg_data16_send(
         chan,
         0x5b,   // Skybrush status packet type marker
-        15,     // effective packet length, including receiver protocol
+        16,     // includes receiver protocol, mode, and link quality
         packet
     );
 }

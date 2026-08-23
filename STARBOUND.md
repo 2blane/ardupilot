@@ -20,6 +20,38 @@ Then, when we ran the ./waf code we had to go through 20 security prompts to all
 ./waf distclean ; Tools/scripts/build_bootloaders.py Starbound ; ./waf configure --board Starbound ; ./waf copter ; arm-none-eabi-objcopy -I ihex -O binary build/Starbound/bin/arducopter_with_bl.hex build/Starbound/bin/arducopter_with_bl.bin
 ```
 
+### Creating an ABIN file for SD-card ArduPilot updates
+The Starbound bootloader checks the SD card for this file on startup:
+```
+/APM/UPDATE/ardupilot.abin
+```
+
+Build the normal Starbound Copter firmware:
+```
+./waf configure --board Starbound
+./waf copter
+```
+
+The build creates:
+```
+build/Starbound/bin/arducopter.abin
+```
+
+Copy or upload that file to the SD card as:
+```
+/APM/UPDATE/ardupilot.abin
+```
+
+On the next boot, the bootloader verifies and flashes the file, deletes it after a successful update, and appends the result to:
+```
+/APM/UPDATE/ardupilot-update.log
+```
+
+If you need to create the ABIN manually from an existing `.bin`, run:
+```
+Tools/scripts/make_abin.sh build/Starbound/bin/arducopter.bin build/Starbound/bin/arducopter.abin
+```
+
 4) A) Uploading the code over usb with dfu-util
 ```
 dfu-util -a 0 --dfuse-address 0x08000000 -D build/Starbound/bin/arducopter_with_bl.bin -R

@@ -11,6 +11,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include "stm32_util.h"
 
 #include <AP_HAL_ChibiOS/hwdef/common/flash.h>
@@ -42,6 +43,31 @@ int16_t char_to_hex(char a)
 
 #define MAX_IO_SIZE 4096
 static uint8_t buffer[MAX_IO_SIZE];
+
+static void log_update_event(const char *fmt, ...)
+{
+    FIL log_fh;
+    if (f_open(&log_fh, "/APM/UPDATE/ardupilot-update.log", FA_WRITE | FA_OPEN_ALWAYS) != FR_OK) {
+        return;
+    }
+
+    f_lseek(&log_fh, f_size(&log_fh));
+
+    char line[160];
+    va_list args;
+    va_start(args, fmt);
+    const int len = vsnprintf(line, sizeof(line), fmt, args);
+    va_end(args);
+
+    if (len > 0) {
+        UINT written;
+        f_write(&log_fh, line, MIN(unsigned(len), unsigned(sizeof(line) - 1)), &written);
+        f_write(&log_fh, "\n", 1, &written);
+        f_sync(&log_fh);
+    }
+
+    f_close(&log_fh);
+}
 
 // a class which provides parsing functionality for abin files;
 // inheritors must supply a function to deal with the body of the abin
@@ -315,13 +341,11 @@ bool flash_from_sd()
     bool ret = false;
 
     // expected filepath for abin:
-    const char *abin_path = "/ardupilot.abin";
+    const char *abin_path = "/APM/UPDATE/ardupilot.abin";
     // we rename to this before verifying the abin:
-    const char *verify_abin_path = "/ardupilot-verify.abin";
+    const char *verify_abin_path = "/APM/UPDATE/ardupilot-verify.abin";
     // we rename to this before flashing the abin:
-    const char *flash_abin_path = "/ardupilot-flash.abin";
-    // we rename to this after flashing the abin:
-    const char *flashed_abin_path = "/ardupilot-flashed.abin";
+    const char *flash_abin_path = "/APM/UPDATE/ardupilot-flash.abin";
 
     ABinVerifier *verifier = nullptr;
     ABinFlasher *flasher = nullptr;
@@ -331,40 +355,44 @@ bool flash_from_sd()
         goto out;
     }
 
+    log_update_event("attempt: found %s size=%lu", abin_path, (unsigned long)info.fsize);
+
     f_unlink(verify_abin_path);
     f_unlink(flash_abin_path);
-    f_unlink(flashed_abin_path);
 
     // rename the file so we only ever attempt to flash from it once:
     if (f_rename(abin_path, verify_abin_path) != FR_OK) {
-        // we would be nice to indicate an error here.
-        // we could try to drop a message on the SD card?
+        log_update_event("failure: rename %s to verify path failed", abin_path);
         return false;
     }
 
     verifier = new ABinVerifier{verify_abin_path};
     if (!verifier->run()) {
+        log_update_event("failure: verify failed");
+        f_unlink(verify_abin_path);
         goto out;
     }
+    log_update_event("verify: ok");
 
     // rename the file so we only ever attempt to flash from it once:
     if (f_rename(verify_abin_path, flash_abin_path) != FR_OK) {
-        // we would be nice to indicate an error here.
-        // we could try to drop a message on the SD card?
+        log_update_event("failure: rename verify to flash path failed");
+        f_unlink(verify_abin_path);
         return false;
     }
 
     flasher = new ABinFlasher{flash_abin_path};
     if (!flasher->run()) {
+        log_update_event("failure: flash failed");
+        f_unlink(flash_abin_path);
         goto out;
     }
 
-    // rename the file to indicate successful flash:
-    if (f_rename(flash_abin_path, flashed_abin_path) != FR_OK) {
-        // we would be nice to indicate an error here.
-        // we could try to drop a message on the SD card?
+    if (f_unlink(flash_abin_path) != FR_OK) {
+        log_update_event("failure: flashed but could not delete %s", flash_abin_path);
         return false;
     }
+    log_update_event("success: flashed and deleted update file");
 
     ret = true;
 
