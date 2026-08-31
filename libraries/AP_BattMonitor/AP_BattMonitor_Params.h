@@ -38,6 +38,7 @@ public:
     AP_Float _critical_capacity;        /// capacity level used to trigger a critical battery failsafe
     AP_Int32 _arming_minimum_capacity;  /// capacity level required to arm
     AP_Float _arming_minimum_voltage;   /// voltage level required to arm
+    AP_Float _sleep_voltage;            /// voltage level used to trigger a MAVLink radio sleep command
     AP_Int32 _options;                  /// Options
 #if AP_BATTERY_WATT_MAX_ENABLED
     AP_Int16 _watt_max;                 /// max battery power allowed. Reduce max throttle to reduce current to satisfy t    his limit
@@ -47,6 +48,7 @@ public:
     AP_Int8  _failsafe_voltage_source;  /// voltage type used for detection of low voltage event
     AP_Int8  _failsafe_low_action;      /// action to preform on a low battery failsafe
     AP_Int8  _failsafe_critical_action; /// action to preform on a critical battery failsafe
+    AP_Int8  _sleep_voltage_timeout;    /// timeout in seconds before a MAVLink radio sleep command is sent
 #if AP_BATTERY_ESC_TELEM_OUTBOUND_ENABLED
     AP_Int8  _esc_telem_outbound_index; /// bitmask of ESCs to forward voltage, current, consumption and temperature to.
 #endif

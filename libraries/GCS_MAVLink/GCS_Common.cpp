@@ -3197,6 +3197,29 @@ void GCS_MAVLINK::send_vfr_hud()
  */
 MAV_RESULT GCS_MAVLINK::handle_preflight_reboot(const mavlink_command_int_t &packet, const mavlink_message_t &msg)
 {
+    if (is_equal(packet.param1, 126.0f)) {
+        if (hal.util->get_soft_armed() || AP_Notify::flags.armed || AP_Notify::flags.flying) {
+            return MAV_RESULT_DENIED;
+        }
+
+        mavlink_command_long_t cmd_msg{};
+        cmd_msg.target_system = 0;
+        cmd_msg.target_component = 0;
+        cmd_msg.command = MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN;
+        cmd_msg.param1 = 126.0f;
+
+        for (uint8_t i = 0; i < gcs().num_gcs(); i++) {
+            GCS_MAVLINK *link = gcs().chan(i);
+            if (link == nullptr || link->is_private()) {
+                continue;
+            }
+            link->send_message(MAVLINK_MSG_ID_COMMAND_LONG, (char*)&cmd_msg);
+        }
+
+        send_text(MAV_SEVERITY_WARNING, "Forwarding radio sleep command");
+        return MAV_RESULT_ACCEPTED;
+    }
+
     if (is_equal(packet.param1, 42.0f) &&
         is_equal(packet.param2, 24.0f) &&
         is_equal(packet.param3, 71.0f)) {

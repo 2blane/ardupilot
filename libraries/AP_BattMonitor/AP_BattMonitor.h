@@ -303,12 +303,20 @@ private:
     /// returns the failsafe state of the battery
     Failsafe check_failsafe(const uint8_t instance);
     void check_failsafes(void); // checks all batteries failsafes
+#ifndef HAL_BUILD_AP_PERIPH
+    void check_radio_sleep(void);
+    void send_radio_sleep_command(uint8_t instance);
+#endif
 
     battery_failsafe_handler_fn_t _battery_failsafe_handler_fn;
     const int8_t *_failsafe_priorities; // array of failsafe priorities, sorted highest to lowest priority, -1 indicates no more entries
 
     int8_t      _highest_failsafe_priority; // highest selected failsafe action level (used to restrict what actions we move into)
     bool        _has_triggered_failsafe;  // true after a battery failsafe has been triggered for the first time
+#ifndef HAL_BUILD_AP_PERIPH
+    uint32_t    _radio_sleep_start_ms; // system time when radio sleep voltage condition started
+    bool        _radio_sleep_sent;     // true after the sleep command has been sent for the current low voltage event
+#endif
 
 };
 

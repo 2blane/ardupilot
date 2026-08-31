@@ -153,6 +153,23 @@ const AP_Param::GroupInfo AP_BattMonitor_Params::var_info[] = {
     // @Bitmask: 0:Ignore DroneCAN SoC, 1:MPPT reports input voltage and current, 2:MPPT Powered off when disarmed, 3:MPPT Powered on when armed, 4:MPPT Powered off at boot, 5:MPPT Powered on at boot, 6:Send resistance compensated voltage to GCS, 7:Allow DroneCAN InfoAux to be from a different CAN node
     // @User: Advanced
     AP_GROUPINFO("OPTIONS", 21, AP_BattMonitor_Params, _options, 0),
+
+    // @Param: SLP_VOLT
+    // @DisplayName: Radio sleep voltage
+    // @Description: Battery voltage that triggers a MAVLink radio sleep command while the vehicle is disarmed and not flying. Set to 0 to disable. Voltages at or below 1V are ignored so missing batteries or invalid low readings do not trigger the command.
+    // @Units: V
+    // @Increment: 0.1
+    // @User: Advanced
+    AP_GROUPINFO("SLP_VOLT", 23, AP_BattMonitor_Params, _sleep_voltage, 6.0f),
+
+    // @Param: SLP_TIMER
+    // @DisplayName: Radio sleep voltage timeout
+    // @Description: This is the timeout in seconds before a MAVLink radio sleep command is sent while the vehicle is disarmed, not flying, and the battery voltage remains above 1V and below the voltage specified by the @PREFIX@SLP_VOLT parameter. A value of zero disables radio sleep commands.
+    // @Units: s
+    // @Increment: 1
+    // @Range: 0 120
+    // @User: Advanced
+    AP_GROUPINFO("SLP_TIMER", 24, AP_BattMonitor_Params, _sleep_voltage_timeout, 30),
 #endif // HAL_BUILD_AP_PERIPH
 
 #if AP_BATTERY_ESC_TELEM_OUTBOUND_ENABLED

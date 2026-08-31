@@ -681,6 +681,9 @@ void AP_BattMonitor::read()
     }
 
     check_failsafes();
+#ifndef HAL_BUILD_AP_PERIPH
+    check_radio_sleep();
+#endif
     
     checkPoweringOff();
 }
@@ -843,6 +846,81 @@ void AP_BattMonitor::check_failsafes(void)
         }
     }
 }
+
+#ifndef HAL_BUILD_AP_PERIPH
+void AP_BattMonitor::check_radio_sleep(void)
+{
+    if (hal.util->get_soft_armed() || AP_Notify::flags.armed || AP_Notify::flags.flying) {
+        _radio_sleep_start_ms = 0;
+        _radio_sleep_sent = false;
+        return;
+    }
+
+    uint8_t sleep_instance = AP_BATT_PRIMARY_INSTANCE;
+    uint8_t sleep_timeout_s = 0;
+    bool sleep_voltage_detected = false;
+
+    for (uint8_t i = 0; i < _num_instances; i++) {
+        if (drivers[i] == nullptr ||
+            get_type(i) == Type::NONE ||
+            !healthy(i)) {
+            continue;
+        }
+
+        const float sleep_voltage = _params[i]._sleep_voltage;
+        const int8_t timeout_s = _params[i]._sleep_voltage_timeout;
+        if (sleep_voltage <= 1.0f || timeout_s <= 0) {
+            continue;
+        }
+
+        const float voltage_v = voltage(i);
+        if (voltage_v > 1.0f && voltage_v < sleep_voltage) {
+            sleep_instance = i;
+            sleep_timeout_s = uint8_t(timeout_s);
+            sleep_voltage_detected = true;
+            break;
+        }
+    }
+
+    if (!sleep_voltage_detected) {
+        _radio_sleep_start_ms = 0;
+        _radio_sleep_sent = false;
+        return;
+    }
+
+    const uint32_t now_ms = AP_HAL::millis();
+    if (_radio_sleep_start_ms == 0) {
+        _radio_sleep_start_ms = now_ms;
+        return;
+    }
+
+    if (!_radio_sleep_sent &&
+        now_ms - _radio_sleep_start_ms >= uint32_t(sleep_timeout_s) * 1000U) {
+        send_radio_sleep_command(sleep_instance);
+        _radio_sleep_sent = true;
+    }
+}
+
+void AP_BattMonitor::send_radio_sleep_command(uint8_t instance)
+{
+#if HAL_GCS_ENABLED
+    mavlink_command_long_t cmd_msg{};
+    cmd_msg.target_system = 0;
+    cmd_msg.target_component = 0;
+    cmd_msg.command = MAV_CMD_PREFLIGHT_REBOOT_SHUTDOWN;
+    cmd_msg.param1 = 126.0f;
+
+    for (uint8_t i = 0; i < gcs().num_gcs(); i++) {
+        GCS_MAVLINK *link = gcs().chan(i);
+        if (link == nullptr || link->is_private()) {
+            continue;
+        }
+        link->send_message(MAVLINK_MSG_ID_COMMAND_LONG, (char*)&cmd_msg);
+    }
+    gcs().send_text(MAV_SEVERITY_WARNING, "Battery %d %.2fV sending radio sleep command", instance + 1, (double)voltage(instance));
+#endif
+}
+#endif
 
 // return true if any battery is pushing too much power
 bool AP_BattMonitor::overpower_detected() const
