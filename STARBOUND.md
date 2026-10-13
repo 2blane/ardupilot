@@ -1,5 +1,25 @@
 # Build Notes
 
+## Wi-Fi disabled GPS interference test
+
+Build the Starbound Copter test firmware with:
+```
+./waf configure --board Starbound --extra-hwdef libraries/AP_HAL_ChibiOS/hwdef/Starbound/wifi-off.hwdef
+./waf copter
+```
+
+This drives PE4 (ESP32_EN) LOW when the application initializes its GPIOs.
+PE4 is not exposed as GPIO 80, and Wi-Fi firmware programming is disabled so
+it cannot re-enable the chip. PE0/PE1 (UART8), serial numbering, and ELRS/screen
+programming remain unchanged. The existing bootloader is unchanged, so this
+does not guarantee Wi-Fi is disabled before the application starts.
+
+Use `build/Starbound/bin/arducopter.apj` for a normal firmware upload or
+`build/Starbound/bin/arducopter.abin` for the SD update procedure below.
+Use USB or another telemetry link while Wi-Fi is disabled. Compare GPS
+reception after startup under the same conditions, then restore Wi-Fi by
+rebuilding without `--extra-hwdef` and flashing that firmware.
+
 ## Mac Build
 For mac install it was a nightmare to setup the toolchain to build. Basically though, python had an openssl problem using an old version of 1.1 instead of 3 something.
 Then, we had to manually download the tarball for the build components `gcc-arm-none-eabi` and put it in /usr/local -> then update the $PATH so that it found the binaries.

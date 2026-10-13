@@ -1,0 +1,7 @@
+# GPS interference test: hold the onboard Wi-Fi chip disabled on PE4.
+# Keep UART8 on PE0/PE1 and SERIAL_ORDER unchanged for an isolated comparison.
+undef PE4
+PE4 ESP32_EN OUTPUT LOW
+
+# Do not expose PE4 as GPIO(80), or allow the updater to re-enable Wi-Fi.
+define HAL_DRONESHOW_WIFI_ENABLED 0
