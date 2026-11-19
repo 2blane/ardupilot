@@ -1,5 +1,5 @@
 # hw definition file for processing by chibios_pins.py
-# for Matek H743-WING
+# for the current Starbound board (no separate radio or Wi-Fi module)
 
 # MCU class and specific type
 MCU STM32H7xx STM32H743xx
@@ -80,12 +80,10 @@ define HAL_BATT_CURR_SCALE 0.606
 # define HAL_GPIO_LED_OFF 1
 
 # order of UARTs (and USB)
-SERIAL_ORDER OTG1 USART6 USART3 UART7 UART8 UART4 USART2
+SERIAL_ORDER OTG1 USART6 USART3 UART4 USART2
 
-# USB and SERIAL2 through SERIAL6 are all MAVLink-capable on this board. The
-# normal non-networked limit of five backends would leave SERIAL6 (ELRS)
-# without a parser even though its UART is configured for MAVLink2.
-define HAL_MAVLINK_COMM_NUM_BUFFERS 7
+# MAVLink ports: USB, screen, accessory connection and ELRS.
+define HAL_MAVLINK_COMM_NUM_BUFFERS 5
 
 # USART6 (RTK GPS)
 PC6 USART6_TX USART6
@@ -94,18 +92,6 @@ PC7 USART6_RX USART6
 # USART3 (OLED SCREEN)
 PB10 USART3_TX USART3
 PB11 USART3_RX USART3
-
-# UART7 (HM-TRP RADIO)
-PE7 UART7_RX UART7
-PE8 UART7_TX UART7
-
-# UART8 (ESP32 WIFI)
-PE0 UART8_RX UART8
-PE1 UART8_TX UART8
-
-# ESP32 WIFI reset/download-mode control
-PE4 ESP32_EN OUTPUT HIGH GPIO(80)
-PE5 ESP32_IO OUTPUT HIGH GPIO(81)
 
 # UART4 (Accessory Connection)
 PD0 UART4_RX UART4
@@ -122,14 +108,6 @@ PD3 ELRS_IO OUTPUT HIGH GPIO(83)
 # OLED screen reset/download-mode control
 PC0 OLED_EN OUTPUT LOW GPIO(84)
 PC1 OLED_IO OUTPUT LOW GPIO(85)
-
-# USART6 (RC input), SERIAL7
-# PC7 TIM3_CH2 TIM3 RCININT PULLDOWN LOW
-# PC6 USART6_TX USART6 NODMA
-# as an alternative config setup the RX6 pin as a uart. This allows
-# for bi-directional UART based receiver protocols such as FPort
-# without any extra hardware
-# PC7 USART6_RX USART6 NODMA ALT(1)
 
 # CAN bus
 # PD0 CAN1_RX CAN1
@@ -194,7 +172,9 @@ define HAL_DEFAULT_INS_FAST_SAMPLE 1
 
 # BARO DPS310 I2C:0:0x76
 # BARO BMP280 I2C:0:0x76
+# BMP388/BMP390: check both addresses supported by the sensor.
 BARO BMP388 I2C:0:0x76
+# BARO BMP388 I2C:0:0x77
 
 # External IST8310 and onboard MMC5983MA compass on I2C1
 COMPASS IST8310 I2C:0:0x0E false ROTATION_YAW_90

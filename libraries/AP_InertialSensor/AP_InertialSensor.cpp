@@ -2296,7 +2296,8 @@ void AP_InertialSensor::_acal_save_calibrations()
             _accel_calibrator[i].get_calibration(bias, gain);
             _accel_offset(i).set_and_save(bias);
             _accel_scale(i).set_and_save(gain);
-            _accel_id(i).save();
+            // Startup requires a stored ID, even when it matches a board default.
+            _accel_id(i).save(true);
             _accel_id_ok[i] = true;
 #if HAL_INS_TEMPERATURE_CAL_ENABLE
             caltemp_accel(i).set_and_save(get_temperature(i));
@@ -2566,7 +2567,8 @@ MAV_RESULT AP_InertialSensor::simple_accel_cal()
             new_accel_offset[k] -= rotated_gravity;
             _accel_offset(k).set_and_save(new_accel_offset[k]);
             _accel_scale(k).save();
-            _accel_id(k).save();
+            // Startup requires a stored ID, even when it matches a board default.
+            _accel_id(k).save(true);
             _accel_id_ok[k] = true;
 #if HAL_INS_TEMPERATURE_CAL_ENABLE
             caltemp_accel(k).set_and_save(get_temperature(k));
@@ -2711,7 +2713,8 @@ void AP_InertialSensor::force_save_calibration(void)
 {
     for (uint8_t i=0; i<_accel_count; i++) {
         if (_accel_id(i) != 0) {
-            _accel_id(i).save();
+            // Startup requires a stored ID, even when it matches a board default.
+            _accel_id(i).save(true);
             // we also save the scale as the default of 1.0 may be
             // over a stored value of 0.0
             _accel_scale(i).save();

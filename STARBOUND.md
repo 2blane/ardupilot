@@ -1,24 +1,30 @@
 # Build Notes
 
-## Wi-Fi disabled GPS interference test
+## Current board revision
 
-Build the Starbound Copter test firmware with:
-```
-./waf configure --board Starbound --extra-hwdef libraries/AP_HAL_ChibiOS/hwdef/Starbound/wifi-off.hwdef
-./waf copter
-```
+The board has no separate Wi-Fi module or HM-TRP radio. Its serial mapping is:
 
-This drives PE4 (ESP32_EN) LOW when the application initializes its GPIOs.
-PE4 is not exposed as GPIO 80, and Wi-Fi firmware programming is disabled so
-it cannot re-enable the chip. PE0/PE1 (UART8), serial numbering, and ELRS/screen
-programming remain unchanged. The existing bootloader is unchanged, so this
-does not guarantee Wi-Fi is disabled before the application starts.
+| ArduPilot port | Hardware | Use |
+| --- | --- | --- |
+| SERIAL0 | USB OTG1 | Ground station |
+| SERIAL1 | USART6 | RTK GPS |
+| SERIAL2 | USART3 | Screen |
+| SERIAL3 | UART4 | Accessory connection |
+| SERIAL4 | USART2 | ELRS (MAVLink2, 460800 baud) |
 
-Use `build/Starbound/bin/arducopter.apj` for a normal firmware upload or
-`build/Starbound/bin/arducopter.abin` for the SD update procedure below.
-Use USB or another telemetry link while Wi-Fi is disabled. Compare GPS
-reception after startup under the same conditions, then restore Wi-Fi by
-rebuilding without `--extra-hwdef` and flashing that firmware.
+The custom ELRS communication and peripheral programmer share the same port
+constant. Peripheral programming supports only ELRS (target 2) and screen
+(target 3); target 1 is retired. Programming no longer depends on Wi-Fi pins.
+The peripheral images are read from `/APM/UPDATE/ELRS.BIN` and
+`/APM/UPDATE/SCREEN.BIN` after an explicit programming request.
+
+`stm32flash` (see below) installs the flight controller's STM32 firmware. The
+onboard peripheral programmer uses the ESP serial loader for ELRS and screen;
+these are separate programming paths.
+
+The buzzer is disabled (`NTF_BUZZ_PIN=-1`, `NTF_BUZZ_TYPES=0`). When updating an
+already configured controller, also set these saved parameters and verify
+`SERIAL4_PROTOCOL=2`, `SERIAL4_BAUD=460`, and `SERIAL4_OPTIONS=0`.
 
 ## Mac Build
 For mac install it was a nightmare to setup the toolchain to build. Basically though, python had an openssl problem using an old version of 1.1 instead of 3 something.

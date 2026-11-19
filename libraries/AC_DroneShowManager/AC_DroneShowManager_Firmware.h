@@ -5,8 +5,10 @@
 
 namespace DroneShowFirmware {
 
+constexpr uint8_t ELRS_SERIAL_INDEX = 4;
+
 enum class Target : uint8_t {
-    WIFI = 1,
+    // Value 1 is retired; preserve the existing ELRS/screen command IDs.
     ELRS = 2,
     SCREEN = 3,
 };

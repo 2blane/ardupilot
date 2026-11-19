@@ -26,10 +26,6 @@ namespace DroneShowFirmware {
 #define HAL_DRONESHOW_FIRMWARE_PROGRAMMER_ENABLED (CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS)
 #endif
 
-#ifndef HAL_DRONESHOW_WIFI_ENABLED
-#define HAL_DRONESHOW_WIFI_ENABLED 1
-#endif
-
 static constexpr MAV_CMD PROGRAM_COMMAND = MAV_CMD_USER_1;
 static constexpr uint32_t PROGRAM_BAUD = 460800;
 static constexpr uint16_t CHUNK_SIZE = 1024;
@@ -51,7 +47,7 @@ struct TargetConfig {
     bool io_active_high;
 };
 
-#if HAL_DRONESHOW_FIRMWARE_PROGRAMMER_ENABLED && defined(HAL_GPIO_PIN_ESP32_EN) && defined(HAL_GPIO_PIN_ESP32_IO) && defined(HAL_GPIO_PIN_ELRS_EN) && defined(HAL_GPIO_PIN_ELRS_IO) && defined(HAL_GPIO_PIN_OLED_EN) && defined(HAL_GPIO_PIN_OLED_IO)
+#if HAL_DRONESHOW_FIRMWARE_PROGRAMMER_ENABLED && defined(HAL_GPIO_PIN_ELRS_EN) && defined(HAL_GPIO_PIN_ELRS_IO) && defined(HAL_GPIO_PIN_OLED_EN) && defined(HAL_GPIO_PIN_OLED_IO)
 #define DRONESHOW_FIRMWARE_HAS_TARGET_PINS 1
 #else
 #define DRONESHOW_FIRMWARE_HAS_TARGET_PINS 0
@@ -59,10 +55,7 @@ struct TargetConfig {
 
 #if DRONESHOW_FIRMWARE_HAS_TARGET_PINS
 static const TargetConfig targets[] {
-#if HAL_DRONESHOW_WIFI_ENABLED
-    { Target::WIFI,   "wifi",   "/APM/UPDATE/wifi.bin",   "/APM/UPDATE/WIFI.BIN",   4, HAL_GPIO_PIN_ESP32_EN, HAL_GPIO_PIN_ESP32_IO, true,  true  },
-#endif
-    { Target::ELRS,   "elrs",   "/APM/UPDATE/elrs.bin",   "/APM/UPDATE/ELRS.BIN",   6, HAL_GPIO_PIN_ELRS_EN,  HAL_GPIO_PIN_ELRS_IO,  true,  true  },
+    { Target::ELRS,   "elrs",   "/APM/UPDATE/elrs.bin",   "/APM/UPDATE/ELRS.BIN",   ELRS_SERIAL_INDEX, HAL_GPIO_PIN_ELRS_EN,  HAL_GPIO_PIN_ELRS_IO,  true,  true  },
     { Target::SCREEN, "screen", "/APM/UPDATE/screen.bin", "/APM/UPDATE/SCREEN.BIN", 2, HAL_GPIO_PIN_OLED_EN,  HAL_GPIO_PIN_OLED_IO,  false, false },
 };
 #endif

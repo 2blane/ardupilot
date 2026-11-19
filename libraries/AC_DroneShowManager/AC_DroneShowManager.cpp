@@ -25,7 +25,6 @@
 extern const AP_HAL::HAL &hal;
 
 namespace {
-constexpr uint8_t STARBOUND_ELRS_SERIAL_INDEX = 6;
 constexpr float ELRS_MODE_CHANGE_MARKER = 8.0f;
 constexpr float ELRS_NORMAL_MODE = 0.0f;
 constexpr float ELRS_BROADCAST_RECEIVE_MODE = 2.0f;
@@ -35,7 +34,7 @@ constexpr uint32_t ELRS_RADIO_STATUS_TIMEOUT_MS = 3000;
 
 bool send_elrs_mode_command(float mode)
 {
-    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(DroneShowFirmware::ELRS_SERIAL_INDEX);
     if (elrs_uart == nullptr) {
         return false;
     }
@@ -880,7 +879,7 @@ MAV_RESULT AC_DroneShowManager::handle_command_int_packet(const mavlink_command_
             }
         } else if (is_zero(packet.param1 - 2)) {
             // Program an onboard ESP-family peripheral from /APM/UPDATE.
-            // param2: target, 1=wifi, 2=elrs, 3=screen
+            // param2: target, 2=elrs, 3=screen (1 is retired)
             // param3: set to 1 to skip readback verification
             if (AP::motors()->armed()) {
                 return MAV_RESULT_DENIED;
@@ -955,7 +954,7 @@ void AC_DroneShowManager::handle_elrs_radio_status(const mavlink_message_t& msg,
     }
 
     GCS_MAVLINK *link = gcs().chan(source_chan);
-    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(DroneShowFirmware::ELRS_SERIAL_INDEX);
     if (link == nullptr || elrs_uart == nullptr || link->get_uart() != elrs_uart) {
         return;
     }
@@ -1005,7 +1004,7 @@ void AC_DroneShowManager::handle_elrs_rc_override(
     }
 
     GCS_MAVLINK *link = gcs().chan(source_chan);
-    AP_HAL::UARTDriver *elrs_uart = hal.serial(STARBOUND_ELRS_SERIAL_INDEX);
+    AP_HAL::UARTDriver *elrs_uart = hal.serial(DroneShowFirmware::ELRS_SERIAL_INDEX);
     if (link == nullptr || elrs_uart == nullptr || link->get_uart() != elrs_uart) {
         return;
     }
